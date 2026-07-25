@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { api, fmtTokens, type Message, type SessionRow } from '../api'
+import { api, fmtTokens, type Message, type Risk, type SessionRow } from '../api'
 import MessageItem from './MessageItem.vue'
 
 const props = defineProps<{ sessionId: string; liveTick?: number }>()
 
 const session = ref<SessionRow | null>(null)
 const messages = ref<Message[]>([])
+const risks = ref<Risk[]>([])
 const subs = ref<SessionRow[]>([])
 const loading = ref(true)
 const error = ref('')
@@ -19,6 +20,7 @@ async function load() {
     const data = await api.messages(props.sessionId)
     session.value = data.session
     messages.value = data.messages
+    risks.value = (data as any).risks ?? []
     // 主会话：拉取它的 subagent 列表；subagent：不需要
     if (!data.session.parent_id && data.session.subagent_count > 0) {
       subs.value = (await api.sessions({ parent: data.session.id, limit: 100 })).rows
@@ -66,6 +68,14 @@ const emit = defineEmits<{ select: [id: string] }>()
         <span v-if="session.input_tokens">in {{ fmtTokens(session.input_tokens) }}</span>
         <span v-if="session.output_tokens">out {{ fmtTokens(session.output_tokens) }}</span>
         <span v-if="session.avg_tps" class="tps">~{{ session.avg_tps }} tok/s</span>
+      </div>
+      <div v-if="risks.length" class="risks">
+        <span
+          v-for="(r, i) in risks" :key="i"
+          class="risk-chip mono"
+          :class="r.severity"
+          :title="r.snippet ?? ''"
+        >{{ r.rule }}</span>
       </div>
       <div v-if="subs.length" class="subs">
         <span class="subs-label mono">SUBAGENTS</span>
@@ -127,6 +137,15 @@ const emit = defineEmits<{ select: [id: string] }>()
 .stats .tps { color: var(--amber); }
 
 .subs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
+.risks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.risk-chip {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid;
+}
+.risk-chip.high { color: var(--danger); border-color: rgba(225, 90, 90, 0.5); background: rgba(225, 90, 90, 0.08); }
+.risk-chip.medium { color: var(--amber); border-color: rgba(232, 163, 61, 0.4); background: rgba(232, 163, 61, 0.06); }
 .subs-label { font-size: 10px; color: var(--faint); letter-spacing: 0.08em; }
 .sub {
   background: var(--panel-2);

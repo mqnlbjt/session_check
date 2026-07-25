@@ -25,6 +25,7 @@ const AGENT_LABEL: Record<string, string> = { pi: 'PI', claude: 'CC', codex: 'CX
     <div class="meta">
       <span>{{ session.message_count }} 消息</span>
       <span v-if="session.subagent_count" class="subs">▸ {{ session.subagent_count }} sub</span>
+      <span v-if="session.risk_count" class="risk" :title="'命中危险/密钥规则'">⚠ {{ session.risk_count }}</span>
       <span v-if="session.model" class="model mono">{{ session.model }}</span>
       <span v-if="session.output_tokens" class="mono">{{ fmtTokens(session.output_tokens) }} tok</span>
       <span class="time mono">{{ fmtTime(session.started_at) }}</span>
@@ -79,6 +80,7 @@ const AGENT_LABEL: Record<string, string> = { pi: 'PI', claude: 'CC', codex: 'CX
   color: var(--dim);
 }
 .meta .subs { color: var(--amber); }
+.risk { color: var(--danger); font-size: 11px; }
 .model {
   max-width: 110px;
   white-space: nowrap;

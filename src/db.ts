@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { AgentType, NormalizedMessage, Usage } from './model.js'
+import { scanBlocks } from './rules.js'
 
 const DB_PATH = process.env.SPECTATOR_DB ?? join(homedir(), 'data', 'spectator', 'spectator.db')
 
@@ -56,10 +57,27 @@ CREATE TABLE IF NOT EXISTS metrics (
 CREATE INDEX IF NOT EXISTS idx_metrics_session ON metrics(session_id, ts);
 `)
 
-// 轻量迁移：老库补 parent_id / label / avg_tps 列
+// 轻量迁移：老库补 parent_id / label / avg_tps / 监控列
 try { db.exec(`ALTER TABLE sessions ADD COLUMN parent_id TEXT`) } catch { /* 已存在 */ }
 try { db.exec(`ALTER TABLE sessions ADD COLUMN label TEXT`) } catch { /* 已存在 */ }
 try { db.exec(`ALTER TABLE sessions ADD COLUMN avg_tps REAL`) } catch { /* 已存在 */ }
+try { db.exec(`ALTER TABLE sessions ADD COLUMN error_count INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
+try { db.exec(`ALTER TABLE sessions ADD COLUMN risk_count INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
+try { db.exec(`ALTER TABLE sessions ADD COLUMN cache_read INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
+try { db.exec(`ALTER TABLE sessions ADD COLUMN cache_creation INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS risks (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL REFERENCES sessions(id),
+  rule       TEXT NOT NULL,
+  severity   TEXT NOT NULL,
+  snippet    TEXT,
+  ts         TEXT,
+  UNIQUE(session_id, rule, snippet)
+);
+CREATE INDEX IF NOT EXISTS idx_risks_session ON risks(session_id);
+`)
 
 const upsertSession = db.prepare(`
 INSERT INTO sessions (id, agent, parent_id, label, project_path, title, model, started_at, ended_at)
@@ -81,16 +99,20 @@ VALUES (@session_id, @seq, @event_id, @role, @ts, @blocks_json, @model, @usage_j
 
 const bumpSession = db.prepare(`
 UPDATE sessions SET
-  message_count = message_count + 1,
-  ended_at      = CASE WHEN @ts > COALESCE(ended_at, '') THEN @ts ELSE ended_at END,
-  input_tokens  = input_tokens + @input,
-  output_tokens = output_tokens + @output,
-  avg_tps       = NULL   -- 新消息使 TPS 过期，标记待重算
+  message_count   = message_count + 1,
+  ended_at        = CASE WHEN @ts > COALESCE(ended_at, '') THEN @ts ELSE ended_at END,
+  input_tokens    = input_tokens + @input,
+  output_tokens   = output_tokens + @output,
+  cache_read      = cache_read + @cache_read,
+  cache_creation  = cache_creation + @cache_creation,
+  error_count     = error_count + @errors,
+  risk_count      = risk_count + @risks,
+  avg_tps         = NULL   -- 新消息使 TPS 过期，标记待重算
 WHERE id = @id
 `)
 
 const setSessionUsage = db.prepare(`
-UPDATE sessions SET input_tokens = @input, output_tokens = @output WHERE id = @id
+UPDATE sessions SET input_tokens = @input, output_tokens = @output, cache_read = @cache_read WHERE id = @id
 `)
 
 const getSource = db.prepare(`SELECT * FROM sources WHERE path = ?`)
@@ -115,6 +137,7 @@ export function getSessionPkByPath(path: string): string | null {
 
 const insertMetric = db.prepare(`INSERT INTO metrics (session_id, ts, cum_input, cum_output) VALUES (?, ?, ?, ?)`)
 const metricsStmt = db.prepare(`SELECT ts, cum_input, cum_output FROM metrics WHERE session_id = ? ORDER BY ts`)
+const insertRisk = db.prepare(`INSERT OR IGNORE INTO risks (session_id, rule, severity, snippet, ts) VALUES (?, ?, ?, ?, ?)`)
 
 export function appendMetric(sessionPk: string, m: { ts: string; cumInput: number; cumOutput: number }) {
   insertMetric.run(sessionPk, m.ts, m.cumInput, m.cumOutput)
@@ -162,6 +185,10 @@ export function saveSessionMeta(agent: AgentType, meta: { sessionId: string; pro
 }
 
 export function appendMessage(sessionPk: string, seq: number, msg: NormalizedMessage) {
+  // 入库前实时过监控规则：工具错误计数 + 危险操作/密钥扫描
+  const errors = msg.blocks.filter((b) => b.type === 'tool_result' && b.isError).length
+  const riskHits = scanBlocks(msg.blocks)
+
   const info = insertMessage.run({
     session_id: sessionPk,
     seq,
@@ -178,14 +205,21 @@ export function appendMessage(sessionPk: string, seq: number, msg: NormalizedMes
       ts: msg.ts,
       input: msg.usage?.input ?? 0,
       output: msg.usage?.output ?? 0,
+      cache_read: msg.usage?.cacheRead ?? 0,
+      cache_creation: msg.usage?.cacheCreation ?? 0,
+      errors,
+      risks: riskHits.length,
     })
+    for (const h of riskHits) {
+      insertRisk.run(sessionPk, h.rule, h.severity, h.snippet, msg.ts)
+    }
   }
   return info.changes > 0
 }
 
 // codex 的 token_count 是累计值，直接覆盖而不是累加
 export function setCumulativeUsage(sessionPk: string, usage: Usage) {
-  setSessionUsage.run({ id: sessionPk, input: usage.input ?? 0, output: usage.output ?? 0 })
+  setSessionUsage.run({ id: sessionPk, input: usage.input ?? 0, output: usage.output ?? 0, cache_read: usage.cacheRead ?? 0 })
 }
 
 export function saveSource(row: SourceRow) {

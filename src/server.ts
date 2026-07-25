@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { db, getSessionPkByPath } from './db.js'
+import { costOf } from './pricing.js'
 import { scanAll, backfillAllTitles } from './ingest.js'
 import { startWatch } from './watch.js'
 
@@ -33,7 +34,7 @@ app.get('/api/sessions', (c) => {
   const total = (db.prepare(`SELECT COUNT(*) n FROM sessions ${whereSql}`).get(params) as any).n
   const rows = db.prepare(`
     SELECT id, agent, parent_id, label, project_path, title, model, started_at, ended_at,
-           message_count, input_tokens, output_tokens,
+           message_count, input_tokens, output_tokens, error_count, risk_count,
            (SELECT COUNT(*) FROM sessions s2 WHERE s2.parent_id = sessions.id) subagent_count
     FROM sessions ${whereSql}
     ORDER BY started_at DESC LIMIT @limit OFFSET @offset
@@ -114,7 +115,11 @@ app.get('/api/sessions/:id/messages', (c) => {
   const stored = (session as any).avg_tps as number | null
   const avgTps = stored && stored > 0 ? stored : null
 
-  return c.json({ session: { ...(session as any), avg_tps: avgTps }, messages })
+  const risks = db.prepare(`
+    SELECT rule, severity, snippet, ts FROM risks WHERE session_id = ? ORDER BY ts LIMIT 50
+  `).all(id)
+
+  return c.json({ session: { ...(session as any), avg_tps: avgTps }, messages, risks })
 })
 
 // ---- 概览统计 ----
@@ -146,13 +151,62 @@ app.get('/api/overview', (c) => {
     GROUP BY d ORDER BY d
   `).all()
 
-  const models = db.prepare(`
+  const models = (db.prepare(`
     SELECT model, COUNT(*) sessions, SUM(output_tokens) output_tokens,
+           SUM(input_tokens) input_tokens, SUM(cache_read) cache_read, SUM(cache_creation) cache_creation,
            ROUND(AVG(CASE WHEN avg_tps > 0 THEN avg_tps END), 1) avg_tps
     FROM sessions
     WHERE model IS NOT NULL
     GROUP BY model ORDER BY output_tokens DESC LIMIT 12
+  `).all() as any[]).map((m) => ({
+    ...m,
+    cost: costOf(m.model, m.input_tokens ?? 0, m.output_tokens ?? 0, m.cache_read ?? 0, m.cache_creation ?? 0),
+  }))
+
+  // 日成本：按天+模型聚合后在 JS 里套价格表
+  const dailyByModel = db.prepare(`
+    SELECT date(started_at, 'localtime') d, model,
+           SUM(input_tokens) input_tokens, SUM(output_tokens) output_tokens,
+           SUM(cache_read) cache_read, SUM(cache_creation) cache_creation
+    FROM sessions
+    WHERE ${mainOnly} AND started_at >= datetime('now', '-30 days') AND model IS NOT NULL
+    GROUP BY d, model
+  `).all() as any[]
+  const costByDay = new Map<string, number>()
+  for (const r of dailyByModel) {
+    const c = costOf(r.model, r.input_tokens ?? 0, r.output_tokens ?? 0, r.cache_read ?? 0, r.cache_creation ?? 0)
+    if (c != null) costByDay.set(r.d, (costByDay.get(r.d) ?? 0) + c)
+  }
+
+  // 进行中：5 分钟内有新消息的主会话
+  const active = db.prepare(`
+    SELECT id, agent, title, model, message_count, ended_at
+    FROM sessions
+    WHERE ${mainOnly} AND ended_at >= datetime('now', '-5 minutes')
+    ORDER BY ended_at DESC LIMIT 10
   `).all()
+
+  // 错误率：按 agent 汇总 + 错误最多的会话
+  const agentErrors = db.prepare(`
+    SELECT agent, SUM(error_count) errors, COUNT(*) sessions FROM sessions
+    WHERE ${mainOnly} GROUP BY agent
+  `).all()
+  const topErrorSessions = db.prepare(`
+    SELECT id, agent, title, error_count, message_count FROM sessions
+    WHERE ${mainOnly} AND error_count > 0
+    ORDER BY error_count DESC LIMIT 8
+  `).all()
+
+  // 风险命中：按会话聚合规则
+  const riskSessions = db.prepare(`
+    SELECT r.session_id id, s.agent, s.title, COUNT(*) n,
+           GROUP_CONCAT(DISTINCT r.rule) rules, MAX(r.severity = 'high') has_high
+    FROM risks r JOIN sessions s ON s.id = r.session_id
+    GROUP BY r.session_id ORDER BY has_high DESC, n DESC LIMIT 8
+  `).all()
+  const riskTotals = db.prepare(`
+    SELECT COUNT(*) total, SUM(severity = 'high') high FROM risks
+  `).get()
 
   const projects = db.prepare(`
     SELECT project_path, COUNT(*) sessions, SUM(message_count) messages, SUM(output_tokens) output_tokens
@@ -168,7 +222,12 @@ app.get('/api/overview', (c) => {
     FROM sessions WHERE ${mainOnly} GROUP BY agent
   `).all()
 
-  return c.json({ today, daily, models, projects, agents })
+  return c.json({
+    today: { ...(today as any), cost: costByDay.get(new Date().toISOString().slice(0, 10)) ?? 0 },
+    daily: (daily as any[]).map((r) => ({ ...r, cost: costByDay.get(r.d) ?? 0 })),
+    models, projects, agents,
+    active, agentErrors, topErrorSessions, riskSessions, riskTotals,
+  })
 })
 
 // ---- SSE 实时事件：入库即推送，前端自动刷新 ----

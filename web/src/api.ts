@@ -11,8 +11,17 @@ export interface SessionRow {
   input_tokens: number
   output_tokens: number
   subagent_count: number
+  error_count?: number
+  risk_count?: number
   spark?: number[]
   avg_tps?: number | null
+}
+
+export interface Risk {
+  rule: string
+  severity: 'high' | 'medium'
+  snippet: string | null
+  ts: string
 }
 
 export interface Block {
