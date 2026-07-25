@@ -24,6 +24,10 @@ export function createCodexParser(_ctx: ParserContext) {
       }
     }
 
+    if (line?.type === 'turn_context' && sessionId && line.payload?.model) {
+      return { meta: { sessionId, model: line.payload.model } }
+    }
+
     if (line?.type === 'event_msg' && line.payload?.type === 'token_count' && sessionId) {
       const u = line.payload.info?.total_token_usage
       if (!u) return null

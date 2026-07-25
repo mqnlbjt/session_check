@@ -8,6 +8,7 @@ import type { Block, ParseResult, ParserContext } from '../model.js'
 
 export function createClaudeParser(ctx: ParserContext) {
   let metaEmitted = false
+  let lastModel: string | null = null
 
   // 从路径识别 subagent 文件，提取文件级 id 拼进会话 key
   const subMatch = ctx.filePath.match(/\/subagents\/agent-([a-z0-9]+)\.jsonl$/)
@@ -26,15 +27,24 @@ export function createClaudeParser(ctx: ParserContext) {
     const msg = line.message
     if (!msg) return null
 
+    // 模型变化时上报（'<synthetic>' 是 Claude Code 合成的假消息，不算）
+    let modelMeta: ParseResult['meta']
+    if (line.type === 'assistant' && line.sessionId
+      && msg.model && msg.model !== '<synthetic>' && msg.model !== lastModel) {
+      lastModel = msg.model
+      modelMeta = { sessionId: remap(line.sessionId), model: msg.model }
+    }
+
     const meta = !metaEmitted && line.sessionId
       ? {
           sessionId: remap(line.sessionId as string),
           parentSessionId: subFileId ? (line.sessionId as string) : undefined,
           projectPath: line.cwd as string | undefined,
           startedAt: line.timestamp as string | undefined,
+          model: modelMeta?.model,
         }
-      : undefined
-    if (meta) metaEmitted = true
+      : modelMeta
+    if (meta && !metaEmitted) metaEmitted = true
 
     const content = msg.content
     const blocks: Block[] = []
