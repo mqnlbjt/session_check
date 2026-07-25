@@ -12,6 +12,7 @@ export interface SessionRow {
   output_tokens: number
   subagent_count: number
   spark?: number[]
+  avg_tps?: number | null
 }
 
 export interface Block {
@@ -32,6 +33,7 @@ export interface Message {
   blocks: Block[]
   model: string | null
   usage: { input?: number; output?: number; cacheRead?: number; cacheCreation?: number } | null
+  tps?: number
 }
 
 export interface Stats {

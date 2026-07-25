@@ -33,6 +33,7 @@ export function createCodexParser(_ctx: ParserContext) {
           output: u.output_tokens,
           cacheRead: u.cached_input_tokens,
         },
+        metric: { ts, cumInput: u.input_tokens ?? 0, cumOutput: u.output_tokens ?? 0 },
       }
     }
 

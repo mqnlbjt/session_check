@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
+CREATE TABLE IF NOT EXISTS metrics (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id  TEXT NOT NULL REFERENCES sessions(id),
+  ts          TEXT NOT NULL,
+  cum_input   INTEGER NOT NULL,
+  cum_output  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_metrics_session ON metrics(session_id, ts);
 `)
 
 // 轻量迁移：老库补 parent_id / label 列
@@ -84,6 +92,7 @@ UPDATE sessions SET input_tokens = @input, output_tokens = @output WHERE id = @i
 `)
 
 const getSource = db.prepare(`SELECT * FROM sources WHERE path = ?`)
+const sessionPkByPath = db.prepare(`SELECT agent, session_id FROM sources WHERE path = ?`)
 const sessionMsgCount = db.prepare(`SELECT COUNT(*) n FROM messages WHERE session_id = ?`)
 const sessionHashes = db.prepare(`SELECT role, blocks_json FROM messages WHERE session_id = ?`)
 const upsertSource = db.prepare(`
@@ -95,6 +104,30 @@ export interface SourceRow { path: string; agent: string; session_id: string; of
 
 export function readSource(path: string): SourceRow | undefined {
   return getSource.get(path) as SourceRow | undefined
+}
+
+export function getSessionPkByPath(path: string): string | null {
+  const row = sessionPkByPath.get(path) as { agent: string; session_id: string } | undefined
+  return row ? `${row.agent}:${row.session_id}` : null
+}
+
+const insertMetric = db.prepare(`INSERT INTO metrics (session_id, ts, cum_input, cum_output) VALUES (?, ?, ?, ?)`)
+const metricsStmt = db.prepare(`SELECT ts, cum_input, cum_output FROM metrics WHERE session_id = ? ORDER BY ts`)
+
+export function appendMetric(sessionPk: string, m: { ts: string; cumInput: number; cumOutput: number }) {
+  insertMetric.run(sessionPk, m.ts, m.cumInput, m.cumOutput)
+}
+
+// codex TPS：相邻采样点差分，去掉超过 2 分钟的间隔（那是思考/等待，不是在生成）
+export function codexAvgTps(sessionPk: string): number | null {
+  const rows = metricsStmt.all(sessionPk) as { ts: string; cum_output: number }[]
+  let dOut = 0, dTime = 0
+  for (let i = 1; i < rows.length; i++) {
+    const dt = (new Date(rows[i].ts).getTime() - new Date(rows[i - 1].ts).getTime()) / 1000
+    const do_ = rows[i].cum_output - rows[i - 1].cum_output
+    if (dt > 0 && dt <= 120 && do_ > 0) { dOut += do_; dTime += dt }
+  }
+  return dTime > 0 ? Math.round((dOut / dTime) * 10) / 10 : null
 }
 
 export function countMessages(sessionPk: string): number {

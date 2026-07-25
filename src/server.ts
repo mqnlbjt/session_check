@@ -2,10 +2,11 @@ import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { cors } from 'hono/cors'
+import { streamSSE } from 'hono/streaming'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { db } from './db.js'
+import { db, getSessionPkByPath, codexAvgTps } from './db.js'
 import { scanAll, backfillAllTitles } from './ingest.js'
 import { startWatch } from './watch.js'
 
@@ -81,16 +82,45 @@ app.get('/api/sessions/:id/messages', (c) => {
     ORDER BY seq LIMIT ? OFFSET ?
   `).all(id, limit, offset) as any[]
 
-  return c.json({
-    session,
-    messages: rows.map((r) => ({
-      ...r,
-      blocks: JSON.parse(r.blocks_json),
-      usage: r.usage_json ? JSON.parse(r.usage_json) : null,
-      blocks_json: undefined,
-      usage_json: undefined,
-    })),
-  })
+  const messages = rows.map((r) => ({
+    ...r,
+    blocks: JSON.parse(r.blocks_json),
+    usage: r.usage_json ? JSON.parse(r.usage_json) : null,
+    blocks_json: undefined,
+    usage_json: undefined,
+  }))
+
+  // TPS 估算：连续的 assistant 消息是同一次 API 响应的分块（thinking/text/tool_use 拆行），
+  // 按组计算：组总 output ÷ (组末时间 - 组前事件时间)，tps 标在组末消息上。
+  // 间隔含工具执行时间，是下界估值；钳制在 [0.5s, 10min] 防离谱值
+  let genTime = 0, genOut = 0
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]
+    if (m.role !== 'assistant') continue
+    let j = i, out = 0
+    while (j < messages.length && messages[j].role === 'assistant') {
+      out += messages[j].usage?.output ?? 0
+      j++
+    }
+    if (out > 0) {
+      const t0 = i > 0 ? new Date(messages[i - 1].ts).getTime() : new Date(m.ts).getTime() - 1000
+      const t1 = new Date(messages[j - 1].ts).getTime()
+      const dt = Math.min(600, Math.max(0.5, (t1 - t0) / 1000))
+      const tps = Math.round((out / dt) * 10) / 10
+      messages[j - 1].tps = tps
+      genTime += dt
+      genOut += out
+    }
+    i = j - 1
+  }
+
+  // 会话级平均 TPS：claude 用消息级加权；codex 用 token_count 采样差分；pi 无数据
+  const agent = (session as any).agent as string
+  const avgTps = agent === 'codex'
+    ? codexAvgTps(id)
+    : genTime > 0 ? Math.round((genOut / genTime) * 10) / 10 : null
+
+  return c.json({ session: { ...(session as any), avg_tps: avgTps }, messages })
 })
 
 // ---- 概览统计 ----
@@ -102,6 +132,36 @@ app.get('/api/stats', (c) => {
   `).all()
   return c.json({ byAgent })
 })
+
+// ---- SSE 实时事件：入库即推送，前端自动刷新 ----
+interface SseClient { write: (data: string) => void }
+const sseClients = new Set<SseClient>()
+
+// 同一会话的入库事件在 1s 窗口内合并广播，避免工具调用刷屏
+const pendingBroadcast = new Map<string, NodeJS.Timeout>()
+export function broadcastIngest(sessionPk: string | null, added: number) {
+  if (!sessionPk || sseClients.size === 0) return
+  const prev = pendingBroadcast.get(sessionPk)
+  if (prev) clearTimeout(prev)
+  pendingBroadcast.set(sessionPk, setTimeout(() => {
+    pendingBroadcast.delete(sessionPk)
+    const data = JSON.stringify({ type: 'ingest', session: sessionPk, ts: Date.now() })
+    for (const client of sseClients) client.write(data)
+  }, 1000))
+}
+
+app.get('/api/events', (c) =>
+  streamSSE(c, async (stream) => {
+    const client: SseClient = { write: (data) => { stream.writeSSE({ data }).catch(() => {}) } }
+    sseClients.add(client)
+    const ping = setInterval(() => { stream.writeSSE({ event: 'ping', data: '{}' }).catch(() => {}) }, 25000)
+    stream.onAbort(() => {
+      clearInterval(ping)
+      sseClients.delete(client)
+    })
+    await new Promise(() => {}) // 永不 resolve，保持连接
+  })
+)
 
 // ---- 手动触发全量扫描 ----
 app.post('/api/scan', (c) => {
@@ -123,6 +183,7 @@ export function startServer(port = 8321) {
   let titleTimer: NodeJS.Timeout | null = null
   startWatch((path, added) => {
     console.log(`[ingest] +${added} 条 <- ${path}`)
+    broadcastIngest(getSessionPkByPath(path), added)
     // 节流补标题：新 session 的消息入库后才能生成标题
     if (!titleTimer) {
       titleTimer = setTimeout(() => { titleTimer = null; backfillAllTitles() }, 2000)

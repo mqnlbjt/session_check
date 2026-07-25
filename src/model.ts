@@ -49,6 +49,8 @@ export interface ParseResult {
   message?: NormalizedMessage
   // codex 的 token_count 这类只更新 session 级统计
   sessionUsage?: Usage
+  // codex token_count：累计 token 采样点，用于差分算 TPS
+  metric?: { ts: string; cumInput: number; cumOutput: number }
 }
 
 // parser 工厂拿到的文件上下文

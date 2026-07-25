@@ -41,6 +41,7 @@ function toolInputSummary(b: Block): string {
     <span class="role mono" :class="message.role">{{ ROLE_LABEL[message.role] }}</span>
 
     <div class="body">
+      <span v-if="message.tps" class="tps mono">~{{ message.tps }} tok/s</span>
       <template v-for="(b, i) in message.blocks" :key="i">
         <!-- 正文 -->
         <p v-if="b.type === 'text'" class="text">{{ b.text }}</p>
@@ -95,6 +96,12 @@ function toolInputSummary(b: Block): string {
 
 .mono { font-family: var(--mono); }
 .body { min-width: 0; }
+
+.tps {
+  float: right;
+  font-size: 10px;
+  color: var(--faint);
+}
 
 .text { white-space: pre-wrap; word-break: break-word; font-size: 13.5px; }
 

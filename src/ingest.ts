@@ -6,7 +6,7 @@ import type { AgentType, ParseResult, ParserFactory } from './model.js'
 import { createPiParser } from './parsers/pi.js'
 import { createClaudeParser } from './parsers/claude.js'
 import { createCodexParser } from './parsers/codex.js'
-import { appendMessage, readSource, saveSessionMeta, saveSource, setCumulativeUsage, countMessages, getContentHashes, db } from './db.js'
+import { appendMessage, readSource, saveSessionMeta, saveSource, setCumulativeUsage, countMessages, getContentHashes, appendMetric, db } from './db.js'
 
 const HOME = homedir()
 
@@ -183,6 +183,9 @@ export function ingestFile(path: string, agentHint?: AgentType): number {
       }
       if (result.sessionUsage && sessionPk) {
         setCumulativeUsage(sessionPk, result.sessionUsage)
+      }
+      if (result.metric && sessionPk) {
+        appendMetric(sessionPk, result.metric)
       }
     }
 

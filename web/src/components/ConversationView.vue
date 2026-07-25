@@ -3,7 +3,7 @@ import { onMounted, ref, watch } from 'vue'
 import { api, fmtTokens, type Message, type SessionRow } from '../api'
 import MessageItem from './MessageItem.vue'
 
-const props = defineProps<{ sessionId: string }>()
+const props = defineProps<{ sessionId: string; liveTick?: number }>()
 
 const session = ref<SessionRow | null>(null)
 const messages = ref<Message[]>([])
@@ -35,6 +35,15 @@ async function load() {
 onMounted(load)
 watch(() => props.sessionId, load)
 
+// 实时推送：当前会话有新消息入库时，只增量刷新消息流，不动头部
+watch(() => props.liveTick, async () => {
+  if (!props.sessionId) return
+  try {
+    const data = await api.messages(props.sessionId)
+    messages.value = data.messages
+  } catch { /* 静默失败，下次事件再试 */ }
+})
+
 const emit = defineEmits<{ select: [id: string] }>()
 </script>
 
@@ -56,6 +65,7 @@ const emit = defineEmits<{ select: [id: string] }>()
         <span v-if="session.model">{{ session.model }}</span>
         <span v-if="session.input_tokens">in {{ fmtTokens(session.input_tokens) }}</span>
         <span v-if="session.output_tokens">out {{ fmtTokens(session.output_tokens) }}</span>
+        <span v-if="session.avg_tps" class="tps">~{{ session.avg_tps }} tok/s</span>
       </div>
       <div v-if="subs.length" class="subs">
         <span class="subs-label mono">SUBAGENTS</span>
@@ -114,6 +124,7 @@ const emit = defineEmits<{ select: [id: string] }>()
   font-size: 11px;
   color: var(--dim);
 }
+.stats .tps { color: var(--amber); }
 
 .subs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
 .subs-label { font-size: 10px; color: var(--faint); letter-spacing: 0.08em; }

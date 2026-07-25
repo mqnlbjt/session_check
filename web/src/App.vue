@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, fmtTokens, type SessionRow, type Stats } from './api'
 import SessionItem from './components/SessionItem.vue'
 import ConversationView from './components/ConversationView.vue'
@@ -12,6 +12,7 @@ const q = ref('')
 const agentFilter = ref('')
 const loading = ref(false)
 const loadingMore = ref(false)
+const liveTick = ref(0) // 当前打开的会话有新消息时递增，驱动对话流刷新
 
 const AGENTS = [
   { value: '', label: '全部' },
@@ -20,8 +21,8 @@ const AGENTS = [
   { value: 'codex', label: 'codex' },
 ]
 
-async function load(reset = true) {
-  if (reset) { loading.value = true; sessions.value = [] }
+async function load(reset = true, silent = false) {
+  if (reset && !silent) { loading.value = true; sessions.value = [] }
   try {
     const data = await api.sessions({
       agent: agentFilter.value || undefined,
@@ -50,6 +51,18 @@ watch([q, agentFilter], () => {
   timer = setTimeout(() => load(true), 300)
 })
 
+// SSE 实时事件：新消息入库后静默刷新列表/统计；若正好是打开的会话则刷新对话流
+let es: EventSource | null = null
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+function onIngestEvent(sessionPk: string) {
+  if (refreshTimer) clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(() => {
+    load(true, true)
+    api.stats().then((s) => { stats.value = s })
+    if (sessionPk === selected.value) liveTick.value++
+  }, 1200)
+}
+
 function onScroll(e: Event) {
   const el = e.target as HTMLElement
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) loadMore()
@@ -62,9 +75,15 @@ function onSelect(id: string) {
 onMounted(async () => {
   load(true)
   stats.value = await api.stats()
-  // 默认选中最新会话
-  if (!selected.value && sessions.value.length) selected.value = sessions.value[0].id
+  es = new EventSource('/api/events')
+  es.onmessage = (e) => {
+    try {
+      const d = JSON.parse(e.data)
+      if (d.type === 'ingest') onIngestEvent(d.session)
+    } catch { /* 忽略坏事件 */ }
+  }
 })
+onUnmounted(() => es?.close())
 watch(sessions, (rows) => {
   if (!selected.value && rows.length) selected.value = rows[0].id
 }, { once: true })
@@ -130,7 +149,7 @@ function agentStat(agent: string) {
 
     <!-- 右栏：对话查看器 -->
     <main class="main">
-      <ConversationView v-if="selected" :session-id="selected" @select="onSelect" />
+      <ConversationView v-if="selected" :session-id="selected" :live-tick="liveTick" @select="onSelect" />
       <div v-else class="empty">
         <p class="mono">SPECTATOR</p>
         <p>从左侧选择一个会话开始观测</p>
