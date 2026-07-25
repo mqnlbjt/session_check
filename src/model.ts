@@ -43,6 +43,8 @@ export interface ParseResult {
     model?: string
     // 子 agent 会话指向父会话（如 Claude Code 的 subagents/agent-*.jsonl）
     parentSessionId?: string
+    // session_info 里的会话名（pi-subagents worker 会命名为 subagent-worker-*）
+    label?: string
   }
   message?: NormalizedMessage
   // codex 的 token_count 这类只更新 session 级统计

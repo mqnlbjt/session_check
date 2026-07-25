@@ -26,12 +26,12 @@ app.get('/api/sessions', (c) => {
   if (agent) { where.push('agent = @agent'); params.agent = agent }
   if (q) { where.push('(title LIKE @q OR project_path LIKE @q)'); params.q = `%${q}%` }
   if (parent) { where.push('parent_id = @parent'); params.parent = parent }
-  else if (!all) { where.push('parent_id IS NULL') }
+  else if (!all) { where.push(`parent_id IS NULL AND (label IS NULL OR label NOT LIKE 'subagent%')`) }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
   const total = (db.prepare(`SELECT COUNT(*) n FROM sessions ${whereSql}`).get(params) as any).n
   const rows = db.prepare(`
-    SELECT id, agent, parent_id, project_path, title, model, started_at, ended_at,
+    SELECT id, agent, parent_id, label, project_path, title, model, started_at, ended_at,
            message_count, input_tokens, output_tokens,
            (SELECT COUNT(*) FROM sessions s2 WHERE s2.parent_id = sessions.id) subagent_count
     FROM sessions ${whereSql}

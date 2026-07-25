@@ -13,8 +13,15 @@ interface PiContent {
   arguments?: unknown
 }
 
-export function createPiParser(_ctx: ParserContext) {
+export function createPiParser(ctx: ParserContext) {
   let sessionId: string | null = null
+
+  // pi-subagents 派生的子会话嵌套在父会话同名目录里：
+  // <project>/<timestamp>_<父sessionId>/<runId>/run-<N>/session.jsonl
+  const subMatch = ctx.filePath.match(
+    /[\/_]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/[0-9a-f]+\/run-\d+\/session\.jsonl$/
+  )
+  const parentSessionId = subMatch?.[1] ?? null
 
   return function parseLine(line: any): ParseResult | null {
     if (line?.type === 'session') {
@@ -24,8 +31,13 @@ export function createPiParser(_ctx: ParserContext) {
           sessionId: line.id,
           projectPath: line.cwd,
           startedAt: line.timestamp,
+          parentSessionId: parentSessionId ?? undefined,
         },
       }
+    }
+
+    if (line?.type === 'session_info' && sessionId && line.name) {
+      return { meta: { sessionId, label: line.name } }
     }
 
     if (line?.type === 'model_change' && sessionId) {

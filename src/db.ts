@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id            TEXT PRIMARY KEY,   -- agent:sessionId
   agent         TEXT NOT NULL,
   parent_id     TEXT,               -- 子 agent 会话 -> 父会话 id
+  label         TEXT,               -- session_info 的会话名（pi-subagents worker 标记）
   project_path  TEXT,
   title         TEXT,
   model         TEXT,
@@ -47,14 +48,16 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 `)
 
-// 轻量迁移：老库补 parent_id 列
+// 轻量迁移：老库补 parent_id / label 列
 try { db.exec(`ALTER TABLE sessions ADD COLUMN parent_id TEXT`) } catch { /* 已存在 */ }
+try { db.exec(`ALTER TABLE sessions ADD COLUMN label TEXT`) } catch { /* 已存在 */ }
 
 const upsertSession = db.prepare(`
-INSERT INTO sessions (id, agent, parent_id, project_path, title, model, started_at, ended_at)
-VALUES (@id, @agent, @parent_id, @project_path, @title, @model, @started_at, @ended_at)
+INSERT INTO sessions (id, agent, parent_id, label, project_path, title, model, started_at, ended_at)
+VALUES (@id, @agent, @parent_id, @label, @project_path, @title, @model, @started_at, @ended_at)
 ON CONFLICT(id) DO UPDATE SET
   parent_id    = COALESCE(excluded.parent_id, sessions.parent_id),
+  label        = COALESCE(excluded.label, sessions.label),
   project_path = COALESCE(excluded.project_path, sessions.project_path),
   title        = COALESCE(excluded.title, sessions.title),
   model        = COALESCE(excluded.model, sessions.model),
@@ -107,11 +110,12 @@ export function getContentHashes(sessionPk: string): Set<string> {
   return set
 }
 
-export function saveSessionMeta(agent: AgentType, meta: { sessionId: string; projectPath?: string; startedAt?: string; title?: string; model?: string; parentSessionId?: string }, lastTs?: string) {
+export function saveSessionMeta(agent: AgentType, meta: { sessionId: string; projectPath?: string; startedAt?: string; title?: string; model?: string; parentSessionId?: string; label?: string }, lastTs?: string) {
   upsertSession.run({
     id: `${agent}:${meta.sessionId}`,
     agent,
     parent_id: meta.parentSessionId ? `${agent}:${meta.parentSessionId}` : null,
+    label: meta.label ?? null,
     project_path: meta.projectPath ?? null,
     title: meta.title ?? null,
     model: meta.model ?? null,
