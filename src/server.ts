@@ -1,6 +1,10 @@
 import { Hono } from 'hono'
 import { serve } from '@hono/node-server'
+import { serveStatic } from '@hono/node-server/serve-static'
 import { cors } from 'hono/cors'
+import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
 import { db } from './db.js'
 import { scanAll, backfillAllTitles } from './ingest.js'
 import { startWatch } from './watch.js'
@@ -32,7 +36,33 @@ app.get('/api/sessions', (c) => {
            (SELECT COUNT(*) FROM sessions s2 WHERE s2.parent_id = sessions.id) subagent_count
     FROM sessions ${whereSql}
     ORDER BY started_at DESC LIMIT @limit OFFSET @offset
-  `).all(params)
+  `).all(params) as any[]
+
+  // 会话心电条：本页会话的消息时间分布，切成 32 个时间桶
+  if (rows.length) {
+    const ids = rows.map((r) => r.id)
+    const tsRows = db.prepare(
+      `SELECT session_id, ts FROM messages WHERE session_id IN (${ids.map(() => '?').join(',')})`
+    ).all(...ids) as { session_id: string; ts: string }[]
+    const byId = new Map<string, string[]>()
+    for (const r of tsRows) {
+      const arr = byId.get(r.session_id) ?? []
+      arr.push(r.ts)
+      byId.set(r.session_id, arr)
+    }
+    for (const row of rows) {
+      const tss = byId.get(row.id)
+      if (!tss?.length || !row.started_at) { row.spark = []; continue }
+      const t0 = new Date(row.started_at).getTime()
+      const t1 = Math.max(new Date(row.ended_at ?? row.started_at).getTime(), t0 + 1)
+      const spark = new Array(32).fill(0)
+      for (const ts of tss) {
+        const bin = Math.min(31, Math.floor(((new Date(ts).getTime() - t0) / (t1 - t0)) * 32))
+        if (bin >= 0) spark[bin]++
+      }
+      row.spark = spark
+    }
+  }
   return c.json({ total, rows })
 })
 
@@ -78,6 +108,16 @@ app.post('/api/scan', (c) => {
   const stats = scanAll()
   return c.json(stats)
 })
+
+// ---- 前端静态资源（web/dist 构建产物），SPA fallback 到 index.html ----
+const DIST = resolve(import.meta.dirname, '../web/dist')
+if (existsSync(DIST)) {
+  app.use('/*', serveStatic({ root: DIST }))
+  app.get('*', async (c) => {
+    const html = await readFile(join(DIST, 'index.html'), 'utf8')
+    return c.html(html)
+  })
+}
 
 export function startServer(port = 8321) {
   let titleTimer: NodeJS.Timeout | null = null

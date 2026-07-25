@@ -1,0 +1,46 @@
+/* spectator 设计 token：观测室 */
+:root {
+  --ink: #101318;        /* 观测室底色 */
+  --panel: #161A21;      /* 栏/卡片 */
+  --panel-2: #1B2029;    /* hover / 次级面 */
+  --line: #232A35;       /* hairline 分隔 */
+  --text: #D8DEE7;
+  --dim: #7A8699;
+  --faint: #4A5464;
+  --amber: #E8A33D;      /* 信号灯：选中/活跃/关键数据 */
+  --pi: #4FC3F7;
+  --claude: #E8833A;
+  --codex: #6FCF97;
+  --danger: #E15A5A;
+  --sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --mono: 'IBM Plex Mono', ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #app { height: 100%; }
+
+body {
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: rgba(232, 163, 61, 0.28); }
+
+/* 滚动条：细、暗 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+
+button { font-family: inherit; cursor: pointer; }
+input { font-family: inherit; }
+
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
