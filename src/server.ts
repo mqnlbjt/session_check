@@ -6,7 +6,7 @@ import { streamSSE } from 'hono/streaming'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { db, getSessionPkByPath, codexAvgTps } from './db.js'
+import { db, getSessionPkByPath } from './db.js'
 import { scanAll, backfillAllTitles } from './ingest.js'
 import { startWatch } from './watch.js'
 
@@ -93,7 +93,6 @@ app.get('/api/sessions/:id/messages', (c) => {
   // TPS 估算：连续的 assistant 消息是同一次 API 响应的分块（thinking/text/tool_use 拆行），
   // 按组计算：组总 output ÷ (组末时间 - 组前事件时间)，tps 标在组末消息上。
   // 间隔含工具执行时间，是下界估值；钳制在 [0.5s, 10min] 防离谱值
-  let genTime = 0, genOut = 0
   for (let i = 0; i < messages.length; i++) {
     const m = messages[i]
     if (m.role !== 'assistant') continue
@@ -106,19 +105,14 @@ app.get('/api/sessions/:id/messages', (c) => {
       const t0 = i > 0 ? new Date(messages[i - 1].ts).getTime() : new Date(m.ts).getTime() - 1000
       const t1 = new Date(messages[j - 1].ts).getTime()
       const dt = Math.min(600, Math.max(0.5, (t1 - t0) / 1000))
-      const tps = Math.round((out / dt) * 10) / 10
-      messages[j - 1].tps = tps
-      genTime += dt
-      genOut += out
+      messages[j - 1].tps = Math.round((out / dt) * 10) / 10
     }
     i = j - 1
   }
 
-  // 会话级平均 TPS：claude 用消息级加权；codex 用 token_count 采样差分；pi 无数据
-  const agent = (session as any).agent as string
-  const avgTps = agent === 'codex'
-    ? codexAvgTps(id)
-    : genTime > 0 ? Math.round((genOut / genTime) * 10) / 10 : null
+  // 会话级平均 TPS：读预计算值（-1 = 无数据）
+  const stored = (session as any).avg_tps as number | null
+  const avgTps = stored && stored > 0 ? stored : null
 
   return c.json({ session: { ...(session as any), avg_tps: avgTps }, messages })
 })
@@ -131,6 +125,50 @@ app.get('/api/stats', (c) => {
     FROM sessions GROUP BY agent
   `).all()
   return c.json({ byAgent })
+})
+
+// ---- 监控大盘聚合 ----
+app.get('/api/overview', (c) => {
+  const mainOnly = `parent_id IS NULL AND (label IS NULL OR label NOT LIKE 'subagent%')`
+
+  const today = db.prepare(`
+    SELECT COUNT(*) sessions, COALESCE(SUM(message_count),0) messages,
+           COALESCE(SUM(input_tokens),0) input_tokens, COALESCE(SUM(output_tokens),0) output_tokens
+    FROM sessions
+    WHERE ${mainOnly} AND date(started_at, 'localtime') = date('now', 'localtime')
+  `).get()
+
+  const daily = db.prepare(`
+    SELECT date(started_at, 'localtime') d, COUNT(*) sessions,
+           SUM(message_count) messages, SUM(output_tokens) output_tokens, SUM(input_tokens) input_tokens
+    FROM sessions
+    WHERE ${mainOnly} AND started_at >= datetime('now', '-30 days')
+    GROUP BY d ORDER BY d
+  `).all()
+
+  const models = db.prepare(`
+    SELECT model, COUNT(*) sessions, SUM(output_tokens) output_tokens,
+           ROUND(AVG(CASE WHEN avg_tps > 0 THEN avg_tps END), 1) avg_tps
+    FROM sessions
+    WHERE model IS NOT NULL
+    GROUP BY model ORDER BY output_tokens DESC LIMIT 12
+  `).all()
+
+  const projects = db.prepare(`
+    SELECT project_path, COUNT(*) sessions, SUM(message_count) messages, SUM(output_tokens) output_tokens
+    FROM sessions
+    WHERE ${mainOnly} AND project_path IS NOT NULL
+    GROUP BY project_path ORDER BY messages DESC LIMIT 10
+  `).all()
+
+  const agents = db.prepare(`
+    SELECT agent, COUNT(*) sessions, SUM(message_count) messages,
+           SUM(input_tokens) input_tokens, SUM(output_tokens) output_tokens,
+           ROUND(AVG(CASE WHEN avg_tps > 0 THEN avg_tps END), 1) avg_tps
+    FROM sessions WHERE ${mainOnly} GROUP BY agent
+  `).all()
+
+  return c.json({ today, daily, models, projects, agents })
 })
 
 // ---- SSE 实时事件：入库即推送，前端自动刷新 ----

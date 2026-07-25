@@ -56,9 +56,10 @@ CREATE TABLE IF NOT EXISTS metrics (
 CREATE INDEX IF NOT EXISTS idx_metrics_session ON metrics(session_id, ts);
 `)
 
-// 轻量迁移：老库补 parent_id / label 列
+// 轻量迁移：老库补 parent_id / label / avg_tps 列
 try { db.exec(`ALTER TABLE sessions ADD COLUMN parent_id TEXT`) } catch { /* 已存在 */ }
 try { db.exec(`ALTER TABLE sessions ADD COLUMN label TEXT`) } catch { /* 已存在 */ }
+try { db.exec(`ALTER TABLE sessions ADD COLUMN avg_tps REAL`) } catch { /* 已存在 */ }
 
 const upsertSession = db.prepare(`
 INSERT INTO sessions (id, agent, parent_id, label, project_path, title, model, started_at, ended_at)
@@ -83,7 +84,8 @@ UPDATE sessions SET
   message_count = message_count + 1,
   ended_at      = CASE WHEN @ts > COALESCE(ended_at, '') THEN @ts ELSE ended_at END,
   input_tokens  = input_tokens + @input,
-  output_tokens = output_tokens + @output
+  output_tokens = output_tokens + @output,
+  avg_tps       = NULL   -- 新消息使 TPS 过期，标记待重算
 WHERE id = @id
 `)
 
@@ -119,13 +121,14 @@ export function appendMetric(sessionPk: string, m: { ts: string; cumInput: numbe
 }
 
 // codex TPS：相邻采样点差分，去掉超过 2 分钟的间隔（那是思考/等待，不是在生成）
+// 分段 TPS 超过 400 的视为计数畸变（token_count 上报粒度问题），剔除
 export function codexAvgTps(sessionPk: string): number | null {
   const rows = metricsStmt.all(sessionPk) as { ts: string; cum_output: number }[]
   let dOut = 0, dTime = 0
   for (let i = 1; i < rows.length; i++) {
     const dt = (new Date(rows[i].ts).getTime() - new Date(rows[i - 1].ts).getTime()) / 1000
     const do_ = rows[i].cum_output - rows[i - 1].cum_output
-    if (dt > 0 && dt <= 120 && do_ > 0) { dOut += do_; dTime += dt }
+    if (dt > 0 && dt <= 120 && do_ > 0 && do_ / dt <= 400) { dOut += do_; dTime += dt }
   }
   return dTime > 0 ? Math.round((dOut / dTime) * 10) / 10 : null
 }

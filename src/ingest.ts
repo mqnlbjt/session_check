@@ -7,6 +7,7 @@ import { createPiParser } from './parsers/pi.js'
 import { createClaudeParser } from './parsers/claude.js'
 import { createCodexParser } from './parsers/codex.js'
 import { appendMessage, readSource, saveSessionMeta, saveSource, setCumulativeUsage, countMessages, getContentHashes, appendMetric, db } from './db.js'
+import { backfillTps } from './tps.js'
 
 const HOME = homedir()
 
@@ -234,5 +235,6 @@ export function scanAll(): ScanStats {
     }
   }
   backfillAllTitles()
+  backfillTps()
   return { files, ingested, added }
 }

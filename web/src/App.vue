@@ -3,6 +3,10 @@ import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, fmtTokens, type SessionRow, type Stats } from './api'
 import SessionItem from './components/SessionItem.vue'
 import ConversationView from './components/ConversationView.vue'
+import OverviewView from './components/OverviewView.vue'
+
+const view = ref<'overview' | 'sessions'>('overview')
+const overviewRef = ref<InstanceType<typeof OverviewView> | null>(null)
 
 const sessions = ref<SessionRow[]>([])
 const total = ref(0)
@@ -59,6 +63,7 @@ function onIngestEvent(sessionPk: string) {
   refreshTimer = setTimeout(() => {
     load(true, true)
     api.stats().then((s) => { stats.value = s })
+    overviewRef.value?.reload()
     if (sessionPk === selected.value) liveTick.value++
   }, 1200)
 }
@@ -94,12 +99,16 @@ function agentStat(agent: string) {
 </script>
 
 <template>
-  <div class="layout">
+  <div class="layout" :class="{ 'mode-overview': view === 'overview' }">
     <!-- 顶栏：观测状态行 -->
     <header class="topbar">
       <div class="brand">
         <span class="dot" aria-hidden="true"></span>
         <span class="wordmark mono">SPECTATOR</span>
+        <nav class="nav">
+          <button class="nav-btn mono" :class="{ on: view === 'overview' }" @click="view = 'overview'">大盘</button>
+          <button class="nav-btn mono" :class="{ on: view === 'sessions' }" @click="view = 'sessions'">会话</button>
+        </nav>
       </div>
       <div class="topstats mono" v-if="stats">
         <span v-for="a in ['pi', 'claude', 'codex']" :key="a" class="tstat" :class="a">
@@ -147,13 +156,16 @@ function agentStat(agent: string) {
       </div>
     </aside>
 
-    <!-- 右栏：对话查看器 -->
+    <!-- 右栏：对话查看器 / 大盘 -->
     <main class="main">
-      <ConversationView v-if="selected" :session-id="selected" :live-tick="liveTick" @select="onSelect" />
-      <div v-else class="empty">
-        <p class="mono">SPECTATOR</p>
-        <p>从左侧选择一个会话开始观测</p>
-      </div>
+      <OverviewView v-if="view === 'overview'" ref="overviewRef" />
+      <template v-else>
+        <ConversationView v-if="selected" :session-id="selected" :live-tick="liveTick" @select="onSelect" />
+        <div v-else class="empty">
+          <p class="mono">SPECTATOR</p>
+          <p>从左侧选择一个会话开始观测</p>
+        </div>
+      </template>
     </main>
   </div>
 </template>
@@ -178,6 +190,17 @@ function agentStat(agent: string) {
   background: var(--panel);
 }
 .brand { display: flex; align-items: center; gap: 9px; }
+.nav { display: flex; gap: 4px; margin-left: 18px; }
+.nav-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--dim);
+  font-size: 12px;
+  padding: 3px 12px;
+}
+.nav-btn:hover { color: var(--text); }
+.nav-btn.on { color: var(--amber); border-color: var(--amber); background: rgba(232, 163, 61, 0.08); }
 .dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--amber);
@@ -247,4 +270,11 @@ function agentStat(agent: string) {
   .layout { grid-template-columns: 1fr; grid-template-areas: 'top' 'main'; }
   .sidebar { display: none; }
 }
+
+/* 大盘模式：隐藏侧栏，主区通栏 */
+.layout.mode-overview {
+  grid-template-columns: 1fr;
+  grid-template-areas: 'top' 'main';
+}
+.layout.mode-overview .sidebar { display: none; }
 </style>
