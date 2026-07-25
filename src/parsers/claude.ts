@@ -1,14 +1,24 @@
-import type { Block, ParseResult } from '../model.js'
+import type { Block, ParseResult, ParserContext } from '../model.js'
 
 // Claude Code session 文件: ~/.claude/projects/<project>/<sessionId>.jsonl
+// 子 agent 转写: ~/.claude/projects/<project>/<sessionId>/subagents/agent-<fid>.jsonl
+//   子 agent 文件与父会话共享 sessionId，必须拆成独立会话并通过 parentSessionId 关联
 // 每条事件都带 sessionId/cwd/uuid/parentUuid/timestamp
 // message.content: string | [{type: text|thinking|tool_use|tool_result, ...}]
 
-export function createClaudeParser() {
+export function createClaudeParser(ctx: ParserContext) {
   let metaEmitted = false
+
+  // 从路径识别 subagent 文件，提取文件级 id 拼进会话 key
+  const subMatch = ctx.filePath.match(/\/subagents\/agent-([a-z0-9]+)\.jsonl$/)
+  const subFileId = subMatch?.[1] ?? null
+
+  const remap = (sessionId: string) => subFileId ? `${sessionId}:sub:${subFileId}` : sessionId
 
   return function parseLine(line: any): ParseResult | null {
     if (line?.type === 'ai-title' && line.sessionId) {
+      // 标题只归到主会话
+      if (subFileId) return null
       return { meta: { sessionId: line.sessionId, title: line.aiTitle } }
     }
 
@@ -17,7 +27,12 @@ export function createClaudeParser() {
     if (!msg) return null
 
     const meta = !metaEmitted && line.sessionId
-      ? { sessionId: line.sessionId as string, projectPath: line.cwd as string | undefined, startedAt: line.timestamp as string | undefined }
+      ? {
+          sessionId: remap(line.sessionId as string),
+          parentSessionId: subFileId ? (line.sessionId as string) : undefined,
+          projectPath: line.cwd as string | undefined,
+          startedAt: line.timestamp as string | undefined,
+        }
       : undefined
     if (meta) metaEmitted = true
 

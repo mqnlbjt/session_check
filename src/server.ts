@@ -8,10 +8,12 @@ import { startWatch } from './watch.js'
 const app = new Hono()
 app.use('/api/*', cors())
 
-// ---- sessions 列表：按 agent / 关键词筛选 ----
+// ---- sessions 列表：默认只列主会话；?parent=<id> 看某会话的 subagent；?all=1 全部 ----
 app.get('/api/sessions', (c) => {
   const agent = c.req.query('agent')
   const q = c.req.query('q')
+  const parent = c.req.query('parent')
+  const all = c.req.query('all')
   const limit = Math.min(Number(c.req.query('limit') ?? 50), 200)
   const offset = Number(c.req.query('offset') ?? 0)
 
@@ -19,12 +21,15 @@ app.get('/api/sessions', (c) => {
   const params: Record<string, unknown> = { limit, offset }
   if (agent) { where.push('agent = @agent'); params.agent = agent }
   if (q) { where.push('(title LIKE @q OR project_path LIKE @q)'); params.q = `%${q}%` }
+  if (parent) { where.push('parent_id = @parent'); params.parent = parent }
+  else if (!all) { where.push('parent_id IS NULL') }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
   const total = (db.prepare(`SELECT COUNT(*) n FROM sessions ${whereSql}`).get(params) as any).n
   const rows = db.prepare(`
-    SELECT id, agent, project_path, title, model, started_at, ended_at,
-           message_count, input_tokens, output_tokens
+    SELECT id, agent, parent_id, project_path, title, model, started_at, ended_at,
+           message_count, input_tokens, output_tokens,
+           (SELECT COUNT(*) FROM sessions s2 WHERE s2.parent_id = sessions.id) subagent_count
     FROM sessions ${whereSql}
     ORDER BY started_at DESC LIMIT @limit OFFSET @offset
   `).all(params)

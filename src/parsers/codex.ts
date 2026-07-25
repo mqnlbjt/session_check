@@ -1,4 +1,4 @@
-import type { ParseResult } from '../model.js'
+import type { ParseResult, ParserContext } from '../model.js'
 
 // Codex session 文件: ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl 及 archived_sessions/
 // 行结构: {timestamp, type, payload}
@@ -6,7 +6,7 @@ import type { ParseResult } from '../model.js'
 //   response_item: message | function_call | function_call_output | reasoning
 //   event_msg: token_count 等（user_message 与 response_item 重复，忽略）
 
-export function createCodexParser() {
+export function createCodexParser(_ctx: ParserContext) {
   let sessionId: string | null = null
 
   return function parseLine(line: any): ParseResult | null {

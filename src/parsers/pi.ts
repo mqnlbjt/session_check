@@ -1,4 +1,4 @@
-import type { Block, ParseResult } from '../model.js'
+import type { Block, ParseResult, ParserContext } from '../model.js'
 
 // pi session 文件: ~/.pi/agent/sessions/<project>/<ts>_<uuid>.jsonl
 // 首行 {"type":"session", id, cwd, timestamp}
@@ -13,7 +13,7 @@ interface PiContent {
   arguments?: unknown
 }
 
-export function createPiParser() {
+export function createPiParser(_ctx: ParserContext) {
   let sessionId: string | null = null
 
   return function parseLine(line: any): ParseResult | null {

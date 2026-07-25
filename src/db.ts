@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS sources (
 CREATE TABLE IF NOT EXISTS sessions (
   id            TEXT PRIMARY KEY,   -- agent:sessionId
   agent         TEXT NOT NULL,
+  parent_id     TEXT,               -- 子 agent 会话 -> 父会话 id
   project_path  TEXT,
   title         TEXT,
   model         TEXT,
@@ -46,10 +47,14 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 `)
 
+// 轻量迁移：老库补 parent_id 列
+try { db.exec(`ALTER TABLE sessions ADD COLUMN parent_id TEXT`) } catch { /* 已存在 */ }
+
 const upsertSession = db.prepare(`
-INSERT INTO sessions (id, agent, project_path, title, model, started_at, ended_at)
-VALUES (@id, @agent, @project_path, @title, @model, @started_at, @ended_at)
+INSERT INTO sessions (id, agent, parent_id, project_path, title, model, started_at, ended_at)
+VALUES (@id, @agent, @parent_id, @project_path, @title, @model, @started_at, @ended_at)
 ON CONFLICT(id) DO UPDATE SET
+  parent_id    = COALESCE(excluded.parent_id, sessions.parent_id),
   project_path = COALESCE(excluded.project_path, sessions.project_path),
   title        = COALESCE(excluded.title, sessions.title),
   model        = COALESCE(excluded.model, sessions.model),
@@ -76,6 +81,8 @@ UPDATE sessions SET input_tokens = @input, output_tokens = @output WHERE id = @i
 `)
 
 const getSource = db.prepare(`SELECT * FROM sources WHERE path = ?`)
+const sessionMsgCount = db.prepare(`SELECT COUNT(*) n FROM messages WHERE session_id = ?`)
+const sessionHashes = db.prepare(`SELECT role, blocks_json FROM messages WHERE session_id = ?`)
 const upsertSource = db.prepare(`
 INSERT INTO sources (path, agent, session_id, offset, msg_count) VALUES (@path, @agent, @session_id, @offset, @msg_count)
 ON CONFLICT(path) DO UPDATE SET offset = @offset, msg_count = @msg_count
@@ -87,10 +94,24 @@ export function readSource(path: string): SourceRow | undefined {
   return getSource.get(path) as SourceRow | undefined
 }
 
-export function saveSessionMeta(agent: AgentType, meta: { sessionId: string; projectPath?: string; startedAt?: string; title?: string; model?: string }, lastTs?: string) {
+export function countMessages(sessionPk: string): number {
+  return (sessionMsgCount.get(sessionPk) as any).n
+}
+
+// 会话已有消息的内容哈希集合（role+blocks，不含 ts），用于 codex resume 前缀去重
+export function getContentHashes(sessionPk: string): Set<string> {
+  const set = new Set<string>()
+  for (const r of sessionHashes.all(sessionPk) as { role: string; blocks_json: string }[]) {
+    set.add(`${r.role}|${r.blocks_json}`)
+  }
+  return set
+}
+
+export function saveSessionMeta(agent: AgentType, meta: { sessionId: string; projectPath?: string; startedAt?: string; title?: string; model?: string; parentSessionId?: string }, lastTs?: string) {
   upsertSession.run({
     id: `${agent}:${meta.sessionId}`,
     agent,
+    parent_id: meta.parentSessionId ? `${agent}:${meta.parentSessionId}` : null,
     project_path: meta.projectPath ?? null,
     title: meta.title ?? null,
     model: meta.model ?? null,

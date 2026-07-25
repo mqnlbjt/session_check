@@ -41,8 +41,18 @@ export interface ParseResult {
     startedAt?: string
     title?: string
     model?: string
+    // 子 agent 会话指向父会话（如 Claude Code 的 subagents/agent-*.jsonl）
+    parentSessionId?: string
   }
   message?: NormalizedMessage
   // codex 的 token_count 这类只更新 session 级统计
   sessionUsage?: Usage
 }
+
+// parser 工厂拿到的文件上下文
+export interface ParserContext {
+  filePath: string
+}
+
+export type LineParser = (line: any) => ParseResult | null
+export type ParserFactory = (ctx: ParserContext) => LineParser
