@@ -1,0 +1,32 @@
+{
+  "name": "spectator",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "scan": "tsx src/main.ts scan",
+    "serve": "tsx src/main.ts serve",
+    "dev": "tsx watch src/main.ts serve"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@hono/node-server": "^2.0.11",
+    "better-sqlite3": "^13.0.1",
+    "chokidar": "^5.0.0",
+    "hono": "^4.12.32"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.1": true,
+    "esbuild": true
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
+  }
+}
