@@ -171,20 +171,53 @@ app.get('/api/sessions/:id/reviews', (c) => {
 app.get('/api/overview', (c) => {
   const mainOnly = `parent_id IS NULL AND (label IS NULL OR label NOT LIKE 'subagent%')`
 
-  const today = db.prepare(`
-    SELECT COUNT(*) sessions, COALESCE(SUM(message_count),0) messages,
-           COALESCE(SUM(input_tokens),0) input_tokens, COALESCE(SUM(output_tokens),0) output_tokens
-    FROM sessions
-    WHERE ${mainOnly} AND date(started_at, 'localtime') = date('now', 'localtime')
-  `).get()
+  // 活动口径：按消息时间统计，长跑会话跨天也可见
+  const activityToday = db.prepare(`
+    SELECT COUNT(DISTINCT m.session_id) sessions, COUNT(*) messages
+    FROM messages m JOIN sessions s ON s.id = m.session_id
+    WHERE s.${mainOnly} AND date(m.ts, 'localtime') = date('now', 'localtime')
+  `).get() as any
 
-  const daily = db.prepare(`
-    SELECT date(started_at, 'localtime') d, COUNT(*) sessions,
-           SUM(message_count) messages, SUM(output_tokens) output_tokens, SUM(input_tokens) input_tokens
-    FROM sessions
-    WHERE ${mainOnly} AND started_at >= datetime('now', '-30 days')
+  // 每日/今日 token 与成本：按消息 usage 逐条算（模型取消息级，缺失回落会话级）
+  const usageRows = db.prepare(`
+    SELECT date(m.ts, 'localtime') d, COALESCE(m.model, s.model) model, m.usage_json
+    FROM messages m JOIN sessions s ON s.id = m.session_id
+    WHERE m.usage_json IS NOT NULL AND m.ts >= datetime('now', '-30 days')
+  `).all() as { d: string; model: string | null; usage_json: string }[]
+
+  const todayStr = new Date().toLocaleDateString('sv-SE') // YYYY-MM-DD 本地
+  let todayIn = 0, todayOut = 0, todayCost = 0
+  const usageByDay = new Map<string, { input: number; output: number; cost: number }>()
+  for (const r of usageRows) {
+    const u = JSON.parse(r.usage_json)
+    const input = u.input ?? 0, output = u.output ?? 0
+    const cost = costOf(r.model, input, output, u.cacheRead ?? 0, u.cacheCreation ?? 0) ?? 0
+    const agg = usageByDay.get(r.d) ?? { input: 0, output: 0, cost: 0 }
+    agg.input += input; agg.output += output; agg.cost += cost
+    usageByDay.set(r.d, agg)
+    if (r.d === todayStr) { todayIn += input; todayOut += output; todayCost += cost }
+  }
+
+  const today = {
+    sessions: activityToday.sessions,
+    messages: activityToday.messages,
+    input_tokens: todayIn,
+    output_tokens: todayOut,
+    cost: todayCost,
+  }
+
+  // 每日活动：活跃会话数 + 消息数，token/成本由 usageByDay 补
+  const daily = (db.prepare(`
+    SELECT date(m.ts, 'localtime') d, COUNT(DISTINCT m.session_id) sessions, COUNT(*) messages
+    FROM messages m JOIN sessions s ON s.id = m.session_id
+    WHERE s.${mainOnly} AND m.ts >= datetime('now', '-30 days')
     GROUP BY d ORDER BY d
-  `).all()
+  `).all() as { d: string; sessions: number; messages: number }[]).map((r) => ({
+    ...r,
+    output_tokens: usageByDay.get(r.d)?.output ?? 0,
+    input_tokens: usageByDay.get(r.d)?.input ?? 0,
+    cost: usageByDay.get(r.d)?.cost ?? 0,
+  }))
 
   const models = (db.prepare(`
     SELECT model, COUNT(*) sessions, SUM(output_tokens) output_tokens,
@@ -197,21 +230,6 @@ app.get('/api/overview', (c) => {
     ...m,
     cost: costOf(m.model, m.input_tokens ?? 0, m.output_tokens ?? 0, m.cache_read ?? 0, m.cache_creation ?? 0),
   }))
-
-  // 日成本：按天+模型聚合后在 JS 里套价格表
-  const dailyByModel = db.prepare(`
-    SELECT date(started_at, 'localtime') d, model,
-           SUM(input_tokens) input_tokens, SUM(output_tokens) output_tokens,
-           SUM(cache_read) cache_read, SUM(cache_creation) cache_creation
-    FROM sessions
-    WHERE ${mainOnly} AND started_at >= datetime('now', '-30 days') AND model IS NOT NULL
-    GROUP BY d, model
-  `).all() as any[]
-  const costByDay = new Map<string, number>()
-  for (const r of dailyByModel) {
-    const c = costOf(r.model, r.input_tokens ?? 0, r.output_tokens ?? 0, r.cache_read ?? 0, r.cache_creation ?? 0)
-    if (c != null) costByDay.set(r.d, (costByDay.get(r.d) ?? 0) + c)
-  }
 
   // 进行中：5 分钟内有新消息的主会话
   const active = db.prepare(`
@@ -258,8 +276,8 @@ app.get('/api/overview', (c) => {
   `).all()
 
   return c.json({
-    today: { ...(today as any), cost: costByDay.get(new Date().toISOString().slice(0, 10)) ?? 0 },
-    daily: (daily as any[]).map((r) => ({ ...r, cost: costByDay.get(r.d) ?? 0 })),
+    today,
+    daily,
     models, projects, agents,
     active, agentErrors, topErrorSessions, riskSessions, riskTotals,
   })

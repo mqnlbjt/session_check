@@ -85,7 +85,7 @@ function maxOf(nums: (number | null)[]) {
       <!-- KPI 行 -->
       <section class="kpis">
         <div class="kpi">
-          <span class="k-label mono">今日会话</span>
+          <span class="k-label mono">今日活跃</span>
           <span class="k-value">{{ data.today.sessions }}</span>
         </div>
         <div class="kpi">
@@ -111,7 +111,7 @@ function maxOf(nums: (number | null)[]) {
       <!-- 趋势 -->
       <section class="row three">
         <div class="card">
-          <h3 class="c-title mono">会话数 / 天 · 近 30 天</h3>
+          <h3 class="c-title mono">活跃会话 / 天 · 近 30 天</h3>
           <svg :viewBox="`0 0 ${CHART_W} ${CHART_H}`" class="chart">
             <rect v-for="(b, i) in chartBars(fillDays(data.daily, 'sessions'))" :key="i"
               :x="b.x" :y="b.y" :width="b.w" :height="b.h"
