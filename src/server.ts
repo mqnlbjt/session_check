@@ -9,6 +9,10 @@ import { join, resolve } from 'node:path'
 import { db, getSessionPkByPath, insertReview } from './db.js'
 import { costOf } from './pricing.js'
 import { startReview, reviewStatus, type EngineResult } from './review.js'
+import { extractLessons, persistToInstructions, persistToSkill, type PersistMode } from './persist.js'
+
+// 复盘沉淀结果（sessionPk → 写入的文件路径），供 review-status 查询
+export const lastPersist = new Map<string, string>()
 import { scanAll, backfillAllTitles } from './ingest.js'
 import { startWatch } from './watch.js'
 
@@ -169,11 +173,17 @@ app.get('/api/sessions/:id/reviews', (c) => {
 })
 
 // ---- 触发复盘：用会话自己的 agent（headless CLI）评审 ----
-app.post('/api/sessions/:id/review', (c) => {
+app.post('/api/sessions/:id/review', async (c) => {
   const id = c.req.param('id')
-  const session = db.prepare(`SELECT agent FROM sessions WHERE id = ?`).get(id) as { agent: string } | undefined
+  const session = db.prepare(`SELECT agent, project_path, title FROM sessions WHERE id = ?`).get(id) as { agent: string; project_path: string | null; title: string | null } | undefined
   if (!session) return c.json({ error: 'not found' }, 404)
   const agent = session.agent as 'pi' | 'claude' | 'codex'
+
+  let persist: PersistMode = 'none'
+  try {
+    const body = await c.req.json().catch(() => ({}))
+    if (['none', 'instructions', 'skill'].includes(body?.persist)) persist = body.persist
+  } catch { /* 无 body 也行 */ }
 
   const started = startReview(id, agent, (r) => {
     insertReview.run(
@@ -186,13 +196,33 @@ app.post('/api/sessions/:id/review', (c) => {
       JSON.stringify(r.findings),
     )
     console.log(`[review] ${id} 完成 (${r.source})`)
+
+    // 沉淀：把教训写回 agent 的记忆文件
+    if (persist !== 'none' && session.project_path) {
+      const lessons = extractLessons(r.findings)
+      if (lessons.length === 0) {
+        lastPersist.set(id, '') // 空串 = 没有可沉淀的教训
+      } else {
+        try {
+          const title = session.title ?? id
+          const filePath = persist === 'skill'
+            ? persistToSkill(agent, session.project_path, title, lessons)
+            : persistToInstructions(session.project_path, agent, title, lessons)
+          lastPersist.set(id, filePath)
+          console.log(`[review] 已沉淀到 ${filePath}`)
+        } catch (e) {
+          console.error('[review] 沉淀失败:', e)
+        }
+      }
+    }
   })
   if (!started) return c.json({ error: '该会话正在复盘中' }, 409)
-  return c.json({ status: 'started', agent })
+  return c.json({ status: 'started', agent, persist })
 })
 
 app.get('/api/sessions/:id/review-status', (c) => {
-  return c.json(reviewStatus(c.req.param('id')))
+  const id = c.req.param('id')
+  return c.json({ ...reviewStatus(id), persisted: lastPersist.get(id) ?? null })
 })
 
 // ---- 监控大盘聚合 ----

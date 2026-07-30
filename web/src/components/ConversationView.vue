@@ -15,14 +15,22 @@ const loading = ref(true)
 const error = ref('')
 const reviewing = ref(false)
 const reviewError = ref('')
+const persistedTo = ref<string | null>(null)
+const showReviewMenu = ref(false)
 let reviewPoll: ReturnType<typeof setTimeout> | null = null
 
-async function triggerReview() {
+async function triggerReview(persist: 'none' | 'instructions' | 'skill' = 'none') {
+  showReviewMenu.value = false
   reviewing.value = true
   reviewError.value = ''
+  persistedTo.value = null
   const before = new Set(reviews.value.map((r) => r.id))
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(props.sessionId)}/review`, { method: 'POST' })
+    const res = await fetch(`/api/sessions/${encodeURIComponent(props.sessionId)}/review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ persist }),
+    })
     if (!res.ok) throw new Error((await res.json()).error ?? `HTTP ${res.status}`)
     // 轮询等新复盘出现（agent headless 评审要 1-5 分钟）
     const deadline = Date.now() + 5 * 60_000
@@ -32,6 +40,8 @@ async function triggerReview() {
         if (latest.some((r) => !before.has(r.id))) {
           reviews.value = latest
           reviewing.value = false
+          const st = await fetch(`/api/sessions/${encodeURIComponent(props.sessionId)}/review-status`).then((r) => r.json())
+          if (st.persisted) persistedTo.value = st.persisted
           return
         }
         const st = await fetch(`/api/sessions/${encodeURIComponent(props.sessionId)}/review-status`).then((r) => r.json())
@@ -50,6 +60,9 @@ async function triggerReview() {
     reviewing.value = false
   }
 }
+
+// 目标指令文件名按 agent 区分
+const instructionFile = computed(() => session.value?.agent === 'claude' ? 'CLAUDE.md' : 'AGENTS.md')
 
 // 风险 chips 按规则聚合并计数，同规则只显示一个
 import { computed } from 'vue'
@@ -125,9 +138,18 @@ const emit = defineEmits<{ select: [id: string] }>()
         <span v-if="session.input_tokens">in {{ fmtTokens(session.input_tokens) }}</span>
         <span v-if="session.output_tokens">out {{ fmtTokens(session.output_tokens) }}</span>
         <span v-if="session.avg_tps" class="tps">~{{ session.avg_tps }} tok/s</span>
-        <button class="review-btn mono" :disabled="reviewing" @click="triggerReview">
-          {{ reviewing ? '复盘中…' : '复盘' }}
-        </button>
+        <div class="review-actions">
+          <button class="review-btn mono" :disabled="reviewing" @click="showReviewMenu = !showReviewMenu">
+            {{ reviewing ? '复盘中…' : '复盘 ▾' }}
+          </button>
+          <div v-if="showReviewMenu" class="review-menu">
+            <button class="menu-item" @click="triggerReview('none')">只复盘</button>
+            <button class="menu-item" @click="triggerReview('instructions')">复盘 + 写入 {{ instructionFile }}</button>
+            <button class="menu-item" @click="triggerReview('skill')">复盘 + 沉淀为 skill</button>
+          </div>
+        </div>
+        <span v-if="persistedTo" class="persisted">已沉淀 → {{ persistedTo }}</span>
+        <span v-else-if="persistedTo === '' &amp;&amp; !reviewing" class="persisted-none">没有可沉淀的教训</span>
         <span v-if="reviewError" class="review-err">{{ reviewError }}</span>
       </div>
       <div v-if="riskGroups.length" class="risks">
@@ -210,6 +232,34 @@ const emit = defineEmits<{ select: [id: string] }>()
 .review-btn:hover:not(:disabled) { background: rgba(232, 163, 61, 0.12); }
 .review-btn:disabled { opacity: 0.55; cursor: wait; }
 .review-err { color: var(--danger); font-size: 11px; }
+.review-actions { position: relative; margin-left: auto; }
+.review-actions .review-btn { margin-left: 0; }
+.review-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 10;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.menu-item {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 4px;
+}
+.menu-item:hover { background: rgba(232, 163, 61, 0.12); color: var(--amber); }
+.persisted { color: var(--codex); font-size: 11px; }
+.persisted-none { color: var(--faint); font-size: 11px; }
 
 .subs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
 .risks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
