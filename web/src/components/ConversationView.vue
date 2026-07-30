@@ -13,6 +13,43 @@ const reviews = ref<Review[]>([])
 const subs = ref<SessionRow[]>([])
 const loading = ref(true)
 const error = ref('')
+const reviewing = ref(false)
+const reviewError = ref('')
+let reviewPoll: ReturnType<typeof setTimeout> | null = null
+
+async function triggerReview() {
+  reviewing.value = true
+  reviewError.value = ''
+  const before = new Set(reviews.value.map((r) => r.id))
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(props.sessionId)}/review`, { method: 'POST' })
+    if (!res.ok) throw new Error((await res.json()).error ?? `HTTP ${res.status}`)
+    // 轮询等新复盘出现（agent headless 评审要 1-5 分钟）
+    const deadline = Date.now() + 5 * 60_000
+    const poll = async () => {
+      try {
+        const latest = await api.reviews(props.sessionId)
+        if (latest.some((r) => !before.has(r.id))) {
+          reviews.value = latest
+          reviewing.value = false
+          return
+        }
+        const st = await fetch(`/api/sessions/${encodeURIComponent(props.sessionId)}/review-status`).then((r) => r.json())
+        if (st.error) {
+          reviewError.value = st.error
+          reviewing.value = false
+          return
+        }
+      } catch { /* 网络抖动就继续等 */ }
+      if (Date.now() < deadline) reviewPoll = setTimeout(poll, 3000)
+      else { reviewError.value = '复盘超时'; reviewing.value = false }
+    }
+    reviewPoll = setTimeout(poll, 3000)
+  } catch (e: any) {
+    reviewError.value = e?.message ?? '触发失败'
+    reviewing.value = false
+  }
+}
 
 // 风险 chips 按规则聚合并计数，同规则只显示一个
 import { computed } from 'vue'
@@ -88,6 +125,10 @@ const emit = defineEmits<{ select: [id: string] }>()
         <span v-if="session.input_tokens">in {{ fmtTokens(session.input_tokens) }}</span>
         <span v-if="session.output_tokens">out {{ fmtTokens(session.output_tokens) }}</span>
         <span v-if="session.avg_tps" class="tps">~{{ session.avg_tps }} tok/s</span>
+        <button class="review-btn mono" :disabled="reviewing" @click="triggerReview">
+          {{ reviewing ? '复盘中…' : '复盘' }}
+        </button>
+        <span v-if="reviewError" class="review-err">{{ reviewError }}</span>
       </div>
       <div v-if="riskGroups.length" class="risks">
         <span
@@ -157,6 +198,18 @@ const emit = defineEmits<{ select: [id: string] }>()
   color: var(--dim);
 }
 .stats .tps { color: var(--amber); }
+.review-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  color: var(--amber);
+  font-size: 11px;
+  padding: 2px 12px;
+}
+.review-btn:hover:not(:disabled) { background: rgba(232, 163, 61, 0.12); }
+.review-btn:disabled { opacity: 0.55; cursor: wait; }
+.review-err { color: var(--danger); font-size: 11px; }
 
 .subs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }
 .risks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }

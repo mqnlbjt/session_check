@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { db, getSessionPkByPath, insertReview } from './db.js'
 import { costOf } from './pricing.js'
+import { startReview, reviewStatus, type EngineResult } from './review.js'
 import { scanAll, backfillAllTitles } from './ingest.js'
 import { startWatch } from './watch.js'
 
@@ -165,6 +166,33 @@ app.get('/api/sessions/:id/reviews', (c) => {
     FROM reviews WHERE session_id = ? ORDER BY created_at DESC LIMIT 20
   `).all(id) as any[]
   return c.json(rows.map((r) => ({ ...r, findings: JSON.parse(r.findings_json), findings_json: undefined })))
+})
+
+// ---- 触发复盘：用会话自己的 agent（headless CLI）评审 ----
+app.post('/api/sessions/:id/review', (c) => {
+  const id = c.req.param('id')
+  const session = db.prepare(`SELECT agent FROM sessions WHERE id = ?`).get(id) as { agent: string } | undefined
+  if (!session) return c.json({ error: 'not found' }, 404)
+  const agent = session.agent as 'pi' | 'claude' | 'codex'
+
+  const started = startReview(id, agent, (r) => {
+    insertReview.run(
+      r.sessionPk,
+      new Date().toISOString(),
+      r.source,
+      null,
+      ['good', 'mixed', 'problematic'].includes(r.verdict) ? r.verdict : 'mixed',
+      r.summary,
+      JSON.stringify(r.findings),
+    )
+    console.log(`[review] ${id} 完成 (${r.source})`)
+  })
+  if (!started) return c.json({ error: '该会话正在复盘中' }, 409)
+  return c.json({ status: 'started', agent })
+})
+
+app.get('/api/sessions/:id/review-status', (c) => {
+  return c.json(reviewStatus(c.req.param('id')))
 })
 
 // ---- 监控大盘聚合 ----
