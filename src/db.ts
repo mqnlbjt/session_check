@@ -77,6 +77,18 @@ CREATE TABLE IF NOT EXISTS risks (
   UNIQUE(session_id, rule, snippet)
 );
 CREATE INDEX IF NOT EXISTS idx_risks_session ON risks(session_id);
+
+CREATE TABLE IF NOT EXISTS reviews (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id    TEXT NOT NULL REFERENCES sessions(id),
+  created_at    TEXT NOT NULL,
+  source        TEXT NOT NULL,        -- spectator-engine | pi-plugin | claude-plugin | codex-plugin | manual
+  model         TEXT,
+  verdict       TEXT,                 -- good | mixed | problematic
+  summary       TEXT,
+  findings_json TEXT NOT NULL          -- [{type, detail, evidence?}]
+);
+CREATE INDEX IF NOT EXISTS idx_reviews_session ON reviews(session_id);
 `)
 
 const upsertSession = db.prepare(`
@@ -138,6 +150,11 @@ export function getSessionPkByPath(path: string): string | null {
 const insertMetric = db.prepare(`INSERT INTO metrics (session_id, ts, cum_input, cum_output) VALUES (?, ?, ?, ?)`)
 const metricsStmt = db.prepare(`SELECT ts, cum_input, cum_output FROM metrics WHERE session_id = ? ORDER BY ts`)
 const insertRisk = db.prepare(`INSERT OR IGNORE INTO risks (session_id, rule, severity, snippet, ts) VALUES (?, ?, ?, ?, ?)`)
+
+export const insertReview = db.prepare(`
+  INSERT INTO reviews (session_id, created_at, source, model, verdict, summary, findings_json)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+`)
 
 export function appendMetric(sessionPk: string, m: { ts: string; cumInput: number; cumOutput: number }) {
   insertMetric.run(sessionPk, m.ts, m.cumInput, m.cumOutput)

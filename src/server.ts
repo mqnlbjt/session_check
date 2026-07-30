@@ -6,7 +6,7 @@ import { streamSSE } from 'hono/streaming'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { db, getSessionPkByPath } from './db.js'
+import { db, getSessionPkByPath, insertReview } from './db.js'
 import { costOf } from './pricing.js'
 import { scanAll, backfillAllTitles } from './ingest.js'
 import { startWatch } from './watch.js'
@@ -130,6 +130,41 @@ app.get('/api/stats', (c) => {
     FROM sessions GROUP BY agent
   `).all()
   return c.json({ byAgent })
+})
+
+// ---- 复盘结果：agent 插件/外部引擎上传 ----
+const VALID_VERDICTS = new Set(['good', 'mixed', 'problematic'])
+
+app.post('/api/reviews', async (c) => {
+  let body: any
+  try { body = await c.req.json() } catch { return c.json({ error: 'invalid json' }, 400) }
+
+  const { session_id, source, model, verdict, summary, findings } = body ?? {}
+  if (!session_id || typeof session_id !== 'string') return c.json({ error: 'session_id required' }, 400)
+  if (!Array.isArray(findings)) return c.json({ error: 'findings must be an array' }, 400)
+
+  const exists = db.prepare(`SELECT 1 FROM sessions WHERE id = ?`).get(session_id)
+  if (!exists) return c.json({ error: `unknown session: ${session_id}` }, 404)
+
+  const info = insertReview.run(
+    session_id,
+    new Date().toISOString(),
+    String(source ?? 'manual'),
+    model ? String(model) : null,
+    VALID_VERDICTS.has(verdict) ? verdict : 'mixed',
+    summary ? String(summary) : null,
+    JSON.stringify(findings),
+  )
+  return c.json({ id: info.lastInsertRowid })
+})
+
+app.get('/api/sessions/:id/reviews', (c) => {
+  const id = c.req.param('id')
+  const rows = db.prepare(`
+    SELECT id, created_at, source, model, verdict, summary, findings_json
+    FROM reviews WHERE session_id = ? ORDER BY created_at DESC LIMIT 20
+  `).all(id) as any[]
+  return c.json(rows.map((r) => ({ ...r, findings: JSON.parse(r.findings_json), findings_json: undefined })))
 })
 
 // ---- 监控大盘聚合 ----
