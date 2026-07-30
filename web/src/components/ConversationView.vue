@@ -1,16 +1,34 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import { api, fmtTokens, type Message, type Risk, type SessionRow } from '../api'
+import { api, fmtTokens, type Message, type Review, type Risk, type SessionRow } from '../api'
 import MessageItem from './MessageItem.vue'
+import ReviewPanel from './ReviewPanel.vue'
 
 const props = defineProps<{ sessionId: string; liveTick?: number }>()
 
 const session = ref<SessionRow | null>(null)
 const messages = ref<Message[]>([])
 const risks = ref<Risk[]>([])
+const reviews = ref<Review[]>([])
 const subs = ref<SessionRow[]>([])
 const loading = ref(true)
 const error = ref('')
+
+// 风险 chips 按规则聚合并计数，同规则只显示一个
+import { computed } from 'vue'
+const riskGroups = computed(() => {
+  const map = new Map<string, { rule: string; severity: string; count: number; snippet: string | null }>()
+  for (const r of risks.value) {
+    const g = map.get(r.rule)
+    if (g) {
+      g.count++
+      if (r.severity === 'high') g.severity = 'high'
+    } else {
+      map.set(r.rule, { rule: r.rule, severity: r.severity, count: 1, snippet: r.snippet })
+    }
+  }
+  return [...map.values()]
+})
 const viewParent = ref(false) // 查看的是 subagent 时，提供回到父会话的入口
 
 async function load() {
@@ -21,6 +39,7 @@ async function load() {
     session.value = data.session
     messages.value = data.messages
     risks.value = (data as any).risks ?? []
+    reviews.value = await api.reviews(props.sessionId).catch(() => [])
     // 主会话：拉取它的 subagent 列表；subagent：不需要
     if (!data.session.parent_id && data.session.subagent_count > 0) {
       subs.value = (await api.sessions({ parent: data.session.id, limit: 100 })).rows
@@ -43,6 +62,7 @@ watch(() => props.liveTick, async () => {
   try {
     const data = await api.messages(props.sessionId)
     messages.value = data.messages
+    reviews.value = await api.reviews(props.sessionId).catch(() => reviews.value)
   } catch { /* 静默失败，下次事件再试 */ }
 })
 
@@ -69,13 +89,13 @@ const emit = defineEmits<{ select: [id: string] }>()
         <span v-if="session.output_tokens">out {{ fmtTokens(session.output_tokens) }}</span>
         <span v-if="session.avg_tps" class="tps">~{{ session.avg_tps }} tok/s</span>
       </div>
-      <div v-if="risks.length" class="risks">
+      <div v-if="riskGroups.length" class="risks">
         <span
-          v-for="(r, i) in risks" :key="i"
+          v-for="g in riskGroups" :key="g.rule"
           class="risk-chip mono"
-          :class="r.severity"
-          :title="r.snippet ?? ''"
-        >{{ r.rule }}</span>
+          :class="g.severity"
+          :title="g.snippet ?? ''"
+        >{{ g.rule }}<template v-if="g.count > 1"> ×{{ g.count }}</template></span>
       </div>
       <div v-if="subs.length" class="subs">
         <span class="subs-label mono">SUBAGENTS</span>
@@ -86,6 +106,8 @@ const emit = defineEmits<{ select: [id: string] }>()
         >{{ s.id.split(':sub:')[1] ?? s.id }} · {{ s.message_count }} 消息</button>
       </div>
     </header>
+
+    <ReviewPanel :reviews="reviews" />
 
     <div v-if="loading" class="state">加载中…</div>
     <div v-else-if="error" class="state">出错了：{{ error }}</div>

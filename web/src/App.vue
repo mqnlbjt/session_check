@@ -75,9 +75,20 @@ function onScroll(e: Event) {
 
 function onSelect(id: string) {
   selected.value = id
+  view.value = 'sessions'
+  // 同步到 URL，方便分享/刷新保持
+  const url = new URL(location.href)
+  url.searchParams.set('session', id)
+  history.replaceState(null, '', url)
 }
 
 onMounted(async () => {
+  // 支持深链：?session=<id> 直接打开会话页
+  const deepLink = new URLSearchParams(location.search).get('session')
+  if (deepLink) {
+    view.value = 'sessions'
+    selected.value = deepLink
+  }
   load(true)
   stats.value = await api.stats()
   es = new EventSource('/api/events')

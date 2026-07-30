@@ -24,6 +24,22 @@ export interface Risk {
   ts: string
 }
 
+export interface ReviewFinding {
+  type: 'rework' | 'correction' | 'misunderstanding' | 'good_practice' | 'lesson' | 'risk'
+  detail: string
+  evidence?: string
+}
+
+export interface Review {
+  id: number
+  created_at: string
+  source: string
+  model: string | null
+  verdict: 'good' | 'mixed' | 'problematic'
+  summary: string | null
+  findings: ReviewFinding[]
+}
+
 export interface Block {
   type: 'text' | 'thinking' | 'tool_call' | 'tool_result'
   text?: string
@@ -67,6 +83,8 @@ export const api = {
   },
   messages: (id: string, limit = 2000) =>
     get<{ session: SessionRow; messages: Message[] }>(`/api/sessions/${encodeURIComponent(id)}/messages?limit=${limit}`),
+  reviews: (id: string) =>
+    get<Review[]>(`/api/sessions/${encodeURIComponent(id)}/reviews`),
   stats: () => get<Stats>('/api/stats'),
 }
 
