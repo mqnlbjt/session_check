@@ -44,10 +44,14 @@ loginctl enable-linger $USER   # 未登录也运行
 
 ### agent 复盘插件（可选）
 
+把「复盘这个会话」指令一键装到已有的 pi / claude / codex 里（拷贝 SKILL.md 到对应技能目录，幂等）。
+
 ```bash
-bash plugins/install.sh            # 自动检测 pi / claude / codex 并安装
-bash plugins/install.sh uninstall  # 卸载
+bash plugins/install.sh              # 自动检测已装的 agent 并安装插件
+bash plugins/install.sh uninstall    # 卸载
 ```
+
+装完后在任意会话里说**「复盘这个会话」**，agent 会调 spectator API 找到自己的记录、结合现场（repo 状态 / git 历史）分析，回传复盘结果。
 
 ## 架构
 
