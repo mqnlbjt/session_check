@@ -2,6 +2,18 @@
 
 > 日期：2026-07-31 · 状态：ready-for-agent · 前置：grill-me 已对齐（决策见「Implementation Decisions」）
 
+## Vision（北极星）
+
+长期目标：**Harness 改进助手**——基于观测数据自动帮助用户搭建/改进自定义 harness。产品形态：观测到的行为模式 → 诊断 harness 缺口 → 菜单式推荐 → 一键落地：
+
+1. **工作流**：现成开源工作流（Matt 5 步管线、superpowers、bmad 等）做候选池，用户可完整或部分采用
+2. **Skills**：推荐现成 skills，或基于会话模式自动生成自定义 skill（已有雏形：复盘沉淀 + distill-task）
+3. **MCP**：按使用场景缺口推荐 MCP server
+
+路径：观测（采集会话）→ 分析（发现模式）→ 沉淀（教训写回 AGENTS.md/skills）→ 生成（harness 建议）。
+
+本次四期增强定位：**为「生成」环节建设数据地基**——可搜索的历史、可量化的会话质量、可持续的存储、可对比的模型/项目维度。期 5 再开 harness 生成方向。
+
 ## Problem Statement
 
 Spectator 已采集 1226 个会话、13.4 万条消息（304MB），但数据价值没有释放：

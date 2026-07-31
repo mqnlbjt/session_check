@@ -16,7 +16,7 @@ export const lastPersist = new Map<string, string>()
 import { scanAll, backfillAllTitles } from './ingest.js'
 import { startWatch } from './watch.js'
 
-const app = new Hono()
+export const app = new Hono()
 app.use('/api/*', cors())
 
 // ---- sessions 列表：默认只列主会话；?parent=<id> 看某会话的 subagent；?all=1 全部 ----
