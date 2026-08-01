@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, ref, watch } from 'vue'
 import { api, fmtTokens, type Message, type Review, type Risk, type SessionRow } from '../api'
 import MessageItem from './MessageItem.vue'
 import ReviewPanel from './ReviewPanel.vue'
 
-const props = defineProps<{ sessionId: string; liveTick?: number }>()
+const props = defineProps<{ sessionId: string; liveTick?: number; jumpSeq?: number | null }>()
 
 const session = ref<SessionRow | null>(null)
 const messages = ref<Message[]>([])
@@ -106,6 +106,20 @@ async function load() {
 onMounted(load)
 watch(() => props.sessionId, load)
 
+// 搜索跳转定位：消息加载后滚动到 data-seq 对应的消息并闪烁高亮
+const convEl = ref<HTMLElement | null>(null)
+async function scrollToSeq(seq: number) {
+  await nextTick()
+  const el = convEl.value?.querySelector(`[data-seq="${seq}"]`) as HTMLElement | null
+  if (!el) return
+  el.scrollIntoView({ block: 'center' })
+  el.classList.add('flash')
+  setTimeout(() => el.classList.remove('flash'), 2400)
+}
+watch([messages, () => props.jumpSeq], () => {
+  if (props.jumpSeq != null && messages.value.length) scrollToSeq(props.jumpSeq)
+})
+
 // 实时推送：当前会话有新消息入库时，只增量刷新消息流，不动头部
 watch(() => props.liveTick, async () => {
   if (!props.sessionId) return
@@ -120,7 +134,7 @@ const emit = defineEmits<{ select: [id: string] }>()
 </script>
 
 <template>
-  <div class="conv">
+  <div class="conv" ref="convEl">
     <header v-if="session" class="head">
       <div class="crumb">
         <button
@@ -177,7 +191,7 @@ const emit = defineEmits<{ select: [id: string] }>()
     <div v-else-if="!messages.length" class="state">这个会话还没有消息记录</div>
 
     <div v-else class="flow">
-      <MessageItem v-for="m in messages" :key="m.seq" :message="m" />
+      <MessageItem v-for="m in messages" :key="m.seq" :message="m" :data-seq="m.seq" />
     </div>
   </div>
 </template>
@@ -284,4 +298,14 @@ const emit = defineEmits<{ select: [id: string] }>()
 
 .state { padding: 60px 20px; text-align: center; color: var(--dim); }
 .flow { padding: 8px 0 40px; }
+
+/* 搜索跳转的目标消息闪烁高亮 */
+.conv :deep(.msg.flash) {
+  animation: flash-bg 2.4s ease-out;
+  border-radius: 6px;
+}
+@keyframes flash-bg {
+  0%, 40% { background: rgba(232, 163, 61, 0.18); box-shadow: 0 0 0 1px rgba(232, 163, 61, 0.5); }
+  100% { background: transparent; box-shadow: none; }
+}
 </style>

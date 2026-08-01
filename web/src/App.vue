@@ -4,14 +4,16 @@ import { api, fmtTokens, type SessionRow, type Stats } from './api'
 import SessionItem from './components/SessionItem.vue'
 import ConversationView from './components/ConversationView.vue'
 import OverviewView from './components/OverviewView.vue'
+import SearchView from './components/SearchView.vue'
 
-const view = ref<'overview' | 'sessions'>('overview')
+const view = ref<'overview' | 'sessions' | 'search'>('overview')
 const overviewRef = ref<InstanceType<typeof OverviewView> | null>(null)
 
 const sessions = ref<SessionRow[]>([])
 const total = ref(0)
 const stats = ref<Stats | null>(null)
 const selected = ref<string | null>(null)
+const jumpSeq = ref<number | null>(null) // 搜索结果跳转：定位到会话内某条消息
 const q = ref('')
 const agentFilter = ref('')
 const loading = ref(false)
@@ -75,19 +77,35 @@ function onScroll(e: Event) {
 
 function onSelect(id: string) {
   selected.value = id
+  jumpSeq.value = null
   view.value = 'sessions'
   // 同步到 URL，方便分享/刷新保持
   const url = new URL(location.href)
   url.searchParams.set('session', id)
+  url.searchParams.delete('msg')
+  history.replaceState(null, '', url)
+}
+
+// 搜索结果点击：打开会话并定位到对应消息
+function onJump(sessionId: string, seq: number) {
+  selected.value = sessionId
+  jumpSeq.value = seq
+  view.value = 'sessions'
+  const url = new URL(location.href)
+  url.searchParams.set('session', sessionId)
+  url.searchParams.set('msg', String(seq))
   history.replaceState(null, '', url)
 }
 
 onMounted(async () => {
-  // 支持深链：?session=<id> 直接打开会话页
-  const deepLink = new URLSearchParams(location.search).get('session')
+  // 支持深链：?session=<id>&msg=<seq> 直接打开会话页并定位
+  const sp = new URLSearchParams(location.search)
+  const deepLink = sp.get('session')
   if (deepLink) {
     view.value = 'sessions'
     selected.value = deepLink
+    const msg = sp.get('msg')
+    if (msg) jumpSeq.value = Number(msg)
   }
   load(true)
   stats.value = await api.stats()
@@ -110,7 +128,7 @@ function agentStat(agent: string) {
 </script>
 
 <template>
-  <div class="layout" :class="{ 'mode-overview': view === 'overview' }">
+  <div class="layout" :class="{ 'mode-overview': view !== 'sessions' }">
     <!-- 顶栏：观测状态行 -->
     <header class="topbar">
       <div class="brand">
@@ -119,6 +137,7 @@ function agentStat(agent: string) {
         <nav class="nav">
           <button class="nav-btn mono" :class="{ on: view === 'overview' }" @click="view = 'overview'">大盘</button>
           <button class="nav-btn mono" :class="{ on: view === 'sessions' }" @click="view = 'sessions'">会话</button>
+          <button class="nav-btn mono" :class="{ on: view === 'search' }" @click="view = 'search'">搜索</button>
         </nav>
       </div>
       <div class="topstats mono" v-if="stats">
@@ -170,8 +189,9 @@ function agentStat(agent: string) {
     <!-- 右栏：对话查看器 / 大盘 -->
     <main class="main">
       <OverviewView v-if="view === 'overview'" ref="overviewRef" />
+      <SearchView v-else-if="view === 'search'" @jump="onJump" />
       <template v-else>
-        <ConversationView v-if="selected" :session-id="selected" :live-tick="liveTick" @select="onSelect" />
+        <ConversationView v-if="selected" :session-id="selected" :live-tick="liveTick" :jump-seq="jumpSeq" @select="onSelect" />
         <div v-else class="empty">
           <p class="mono">SPECTATOR</p>
           <p>从左侧选择一个会话开始观测</p>

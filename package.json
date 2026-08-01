@@ -9,7 +9,8 @@
     "serve": "tsx src/main.ts serve",
     "dev": "tsx watch src/main.ts serve",
     "build:web": "npm --prefix web run build",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "backfill-fts": "tsx src/backfill-fts.ts"
   },
   "keywords": [],
   "author": "",

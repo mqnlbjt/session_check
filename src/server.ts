@@ -6,7 +6,7 @@ import { streamSSE } from 'hono/streaming'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { db, getSessionPkByPath, insertReview } from './db.js'
+import { db, getSessionPkByPath, insertReview, searchMessages } from './db.js'
 import { costOf } from './pricing.js'
 import { startReview, reviewStatus, type EngineResult } from './review.js'
 import { extractLessons, persistToInstructions, persistToSkill, type PersistMode } from './persist.js'
@@ -71,6 +71,19 @@ app.get('/api/sessions', (c) => {
     }
   }
   return c.json({ total, rows })
+})
+
+// ---- 全文搜索：?q= 必填，&agent= &project= 过滤 ----
+app.get('/api/search', (c) => {
+  const q = (c.req.query('q') ?? '').trim()
+  if (!q) return c.json({ total: 0, rows: [] })
+  const limit = Math.min(Number(c.req.query('limit') ?? 30), 100)
+  const offset = Number(c.req.query('offset') ?? 0)
+  return c.json(searchMessages(q, {
+    agent: c.req.query('agent'),
+    project: c.req.query('project'),
+    limit, offset,
+  }))
 })
 
 // ---- 单个 session 的消息流 ----
