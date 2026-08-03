@@ -398,12 +398,13 @@ app.get('/api/overview', (c) => {
     cost: usageByDay.get(r.d)?.cost ?? 0,
   }))
 
+  // 模型排行：近 30 天活动口径（全量排行里老模型霸榜，新模型永远上不了榜）
   const models = (db.prepare(`
     SELECT model, COUNT(*) sessions, SUM(output_tokens) output_tokens,
            SUM(input_tokens) input_tokens, SUM(cache_read) cache_read, SUM(cache_creation) cache_creation,
            ROUND(AVG(CASE WHEN avg_tps > 0 THEN avg_tps END), 1) avg_tps
     FROM sessions
-    WHERE model IS NOT NULL
+    WHERE model IS NOT NULL AND started_at >= datetime('now', '-30 days')
     GROUP BY model ORDER BY output_tokens DESC LIMIT 12
   `).all() as any[]).map((m) => ({
     ...m,
