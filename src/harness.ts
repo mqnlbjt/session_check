@@ -125,30 +125,44 @@ export async function generateGuardRules(projectPath: string, llm: LlmFn = defau
   return added
 }
 
-// 模型建议：纯数据。成本高 + 存在「质量相当但便宜得多」的替代 → 建议
-// 质量相当的定义：替代品平均纠正率不显著更高（+0.2 容差）
-export function modelAdvice(): { content: string; evidence: string }[] {
-  const models = modelCompare()
+// 模型建议：30 天窗口（模型更新快，90 天数据会误导）。
+// 触发：成本 >$20 + 存在「质量相当但便宜得多」的替代（纠正率容差 +0.2，会话数 ≥5）
+// 证据：两个模型的完整指标对比（成本/纠正/失败/延迟/TPS/缓存/产出），前端渲染对比表
+interface ModelMetrics {
+  model: string; sessions: number; cost: number; avg_corrections: number
+  fail_rate: number; avg_latency_s: number | null; avg_tps: number | null
+  cache_hit_pct: number; active_hours: number; commits: number; code_lines: number
+}
+
+export async function modelAdvice(): Promise<{ content: string; evidence: string }[]> {
+  const models = (await modelCompare(30)) as ModelMetrics[]
   const advice: { content: string; evidence: string }[] = []
   for (const m of models) {
-    if ((m.cost ?? 0) < 20) continue
+    if (m.cost < 20) continue
     const alt = models.find((x) =>
       x.model !== m.model && x.sessions >= 5 &&
-      (x.cost ?? 0) < (m.cost ?? 0) * 0.5 &&
+      x.cost < m.cost * 0.5 &&
       x.avg_corrections <= m.avg_corrections + 0.2)
     if (!alt) continue
-    const saving = Math.min(99, Math.round((1 - (alt.cost ?? 0) / (m.cost ?? 1)) * 100))
-    const tpsPart = alt.avg_tps ? `、TPS ${alt.avg_tps}` : ''
+    const saving = Math.min(99, Math.round((1 - alt.cost / m.cost) * 100))
+    const parts = [`成本低 ${saving}%`]
+    if (alt.avg_latency_s && m.avg_latency_s && alt.avg_latency_s < m.avg_latency_s * 0.7) {
+      parts.push(`响应快 ${(m.avg_latency_s / alt.avg_latency_s).toFixed(1)} 倍`)
+    }
     advice.push({
-      content: `${m.model} 近 90 天 $${(m.cost ?? 0).toFixed(1)}（纠正率 ${m.avg_corrections}）；` +
-        `${alt.model} 纠正率 ${alt.avg_corrections} 相当${tpsPart}、成本低 ${saving}%——建议把部分任务切到 ${alt.model}`,
-      evidence: JSON.stringify({ from: m.model, to: alt.model, cost_from: m.cost, cost_to: alt.cost }),
+      content: `${m.model} 近 30 天 $${m.cost.toFixed(1)}（${m.sessions} 会话），${alt.model} 质量相当（纠正率 ${alt.avg_corrections} vs ${m.avg_corrections}）但${parts.join('、')}——建议把部分任务切到 ${alt.model}`,
+      evidence: JSON.stringify({
+        window_days: 30,
+        from: m,
+        to: alt,
+        saving_pct: saving,
+      }),
     })
   }
   return advice
 }
 
-export function listSuggestions() {
+export async function listSuggestions() {
   const suggestions = db.prepare(
     `SELECT * FROM suggestions ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'adopted' THEN 1 ELSE 2 END, created_at DESC`
   ).all()
@@ -159,7 +173,7 @@ export function listSuggestions() {
     WHERE sig.kind = 'correction' AND s.project_path IS NOT NULL
     GROUP BY s.project_path ORDER BY corrections DESC LIMIT 10
   `).all()
-  return { suggestions, modelAdvice: modelAdvice(), candidates }
+  return { suggestions, modelAdvice: await modelAdvice(), candidates }
 }
 
 export function adoptSuggestion(id: number): { adopted_to: string } | null {

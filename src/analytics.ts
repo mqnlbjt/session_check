@@ -37,14 +37,16 @@ export function heatmap() {
 // （用户决策：local/ 前缀也并入官方模型，接受本地代理价格可能虚高）
 const bareModel = (m: string) => (m.includes('/') ? m.split('/').pop()! : m)
 
-export function modelCompare() {
+// windowDays：模型更新快，建议类场景用 30 天；大盘分析默认 90 天
+export async function modelCompare(windowDays = 90) {
+  const window = `datetime('now', '-${Math.trunc(windowDays)} days')`
   const rows = db.prepare(`
     SELECT model, COUNT(*) sessions,
            SUM(input_tokens) input, SUM(output_tokens) output,
            SUM(cache_read) cr, SUM(cache_creation) cc,
            AVG(CASE WHEN avg_tps > 0 THEN avg_tps END) tps  -- -1 是无数据哨兵，不参与平均（对齐大盘口径）
     FROM sessions
-    WHERE ${MAIN_ONLY} AND model IS NOT NULL AND started_at >= ${WINDOW}
+    WHERE ${MAIN_ONLY} AND model IS NOT NULL AND started_at >= ${window}
     GROUP BY model
   `).all() as { model: string; sessions: number; input: number; output: number; cr: number; cc: number; tps: number | null }[]
 
@@ -52,7 +54,7 @@ export function modelCompare() {
     (db.prepare(`
       SELECT s.model, COUNT(*) n FROM signals sig
       JOIN sessions s ON s.id = sig.session_id
-      WHERE sig.kind = 'correction' AND s.${MAIN_ONLY} AND sig.ts >= ${WINDOW}
+      WHERE sig.kind = 'correction' AND s.${MAIN_ONLY} AND sig.ts >= ${window}
       GROUP BY s.model
     `).all() as { model: string; n: number }[]).map((r) => [r.model, r.n])
   )
@@ -84,7 +86,7 @@ export function modelCompare() {
   const failRows = db.prepare(`
     SELECT COALESCE(m.model, s.model) model, COUNT(*) total, SUM(m.api_error) fails
     FROM messages m JOIN sessions s ON s.id = m.session_id
-    WHERE m.role = 'assistant' AND s.${MAIN_ONLY} AND m.ts >= ${WINDOW}
+    WHERE m.role = 'assistant' AND s.${MAIN_ONLY} AND m.ts >= ${window}
       AND COALESCE(m.model, s.model) IS NOT NULL
     GROUP BY 1
   `).all() as { model: string; total: number; fails: number }[]
@@ -94,7 +96,7 @@ export function modelCompare() {
   const reasonRows = db.prepare(`
     SELECT COALESCE(m.model, s.model) model, SUM(json_extract(m.usage_json, '$.reasoning')) reasoning
     FROM messages m JOIN sessions s ON s.id = m.session_id
-    WHERE m.role = 'assistant' AND s.${MAIN_ONLY} AND m.ts >= ${WINDOW} AND m.usage_json IS NOT NULL
+    WHERE m.role = 'assistant' AND s.${MAIN_ONLY} AND m.ts >= ${window} AND m.usage_json IS NOT NULL
     GROUP BY 1
   `).all() as { model: string; reasoning: number | null }[]
   const reasonByModel = new Map(reasonRows.map((r) => [bareModel(r.model), r.reasoning ?? 0]))
@@ -109,7 +111,7 @@ export function modelCompare() {
              LAG(m.ts) OVER w prev_ts,
              LAG(m.role) OVER w prev_role
       FROM messages m JOIN sessions s ON s.id = m.session_id
-      WHERE s.${MAIN_ONLY} AND m.ts >= ${WINDOW}
+      WHERE s.${MAIN_ONLY} AND m.ts >= ${window}
       WINDOW w AS (PARTITION BY m.session_id ORDER BY m.seq)
     )
     SELECT model, AVG((julianday(ts) - julianday(prev_ts)) * 86400) avg_s
@@ -117,9 +119,55 @@ export function modelCompare() {
     WHERE role = 'assistant' AND usage_json IS NOT NULL
       AND prev_role IN ('user', 'tool')
       AND (julianday(ts) - julianday(prev_ts)) * 86400 BETWEEN 0.5 AND 300
+      AND model IS NOT NULL
     GROUP BY model
   `).all() as { model: string; avg_s: number }[]
   const latencyByModel = new Map(latencyRows.map((r) => [bareModel(r.model), r.avg_s]))
+
+  // ---- 产出维度 ----
+  // 活跃时长：消息间隔 cap 5 分钟累加（用户走开/挂壁不计）
+  const activeRows = db.prepare(`
+    WITH all_msgs AS (
+      SELECT COALESCE(m.model, s.model) model, m.ts,
+             LAG(m.ts) OVER w prev_ts
+      FROM messages m JOIN sessions s ON s.id = m.session_id
+      WHERE s.${MAIN_ONLY} AND m.ts >= ${window}
+      WINDOW w AS (PARTITION BY m.session_id ORDER BY m.seq)
+    )
+    SELECT model, SUM(MIN((julianday(ts) - julianday(prev_ts)) * 86400, 300)) active_s
+    FROM all_msgs
+    WHERE prev_ts IS NOT NULL AND (julianday(ts) - julianday(prev_ts)) * 86400 > 0
+      AND model IS NOT NULL
+    GROUP BY model
+  `).all() as { model: string; active_s: number | null }[]
+  const activeByModel = new Map(activeRows.map((r) => [bareModel(r.model), (r.active_s ?? 0) / 3600]))
+
+  // 代码产出：commit 时间落在哪个模型的会话窗口内就归给谁。
+  // 注意不按 session.project_path 匹配仓库：agent 会话的 cwd ≠ 实际工作的仓库
+  // （如在 personal 起 pi 但改的是 spectator），所以扫 ~/data 下所有 git 仓库 + 全局时间窗归属
+  const sessionWindows = db.prepare(`
+    SELECT model, started_at, COALESCE(ended_at, started_at) ended_at
+    FROM sessions
+    WHERE ${MAIN_ONLY} AND model IS NOT NULL AND started_at >= ${window}
+  `).all() as { model: string; started_at: string; ended_at: string }[]
+  const prodByModel = new Map<string, { commits: number; lines: number }>()
+  for (const repo of discoverRepos()) {
+    const commits = await gitActivity(repo, windowDays)
+    for (const c of commits) {
+      for (const w of sessionWindows) {
+        const t0 = new Date(w.started_at).getTime()
+        const t1 = new Date(w.ended_at).getTime() + 30 * 60_000
+        if (c.ts >= t0 && c.ts <= t1) {
+          const key = bareModel(w.model)
+          const agg = prodByModel.get(key) ?? { commits: 0, lines: 0 }
+          agg.commits++
+          agg.lines += c.lines
+          prodByModel.set(key, agg)
+          break // 一个 commit 只归一个模型（取首个匹配窗口）
+        }
+      }
+    }
+  }
 
   return [...merged.values()].map((m) => ({
     model: m.model,
@@ -136,7 +184,68 @@ export function modelCompare() {
     fail_rate: (() => { const f = failByModel.get(m.model); return f && f.total > 0 ? Math.round((f.fails / f.total) * 1000) / 10 : 0 })(),
     reasoning_tokens: reasonByModel.get(m.model) ?? 0,
     avg_latency_s: latencyByModel.has(m.model) ? Math.round(latencyByModel.get(m.model)! * 10) / 10 : null,
+    active_hours: Math.round((activeByModel.get(m.model) ?? 0) * 10) / 10,
+    commits: prodByModel.get(m.model)?.commits ?? 0,
+    code_lines: prodByModel.get(m.model)?.lines ?? 0,
   })).sort((a, b) => b.cost - a.cost)
+}
+
+// ---- git 仓库发现：会话项目路径 ∪ ~/data 下两层内的仓库 ----
+import { existsSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
+
+function discoverRepos(): string[] {
+  const repos = new Set<string>()
+  for (const r of db.prepare(`SELECT DISTINCT project_path FROM sessions WHERE project_path IS NOT NULL`).all() as { project_path: string }[]) {
+    repos.add(r.project_path)
+  }
+  const dataDir = join(homedir(), 'data')
+  const isRepo = (p: string) => { try { return existsSync(join(p, '.git')) } catch { return false } }
+  const subdirs = (p: string) => { try { return readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) } catch { return [] } }
+  for (const d1 of subdirs(dataDir)) {
+    const p1 = join(dataDir, d1)
+    if (isRepo(p1)) repos.add(p1)
+    for (const d2 of subdirs(p1)) {
+      const p2 = join(p1, d2)
+      if (isRepo(p2)) repos.add(p2)
+    }
+  }
+  return [...repos]
+}
+
+// ---- 项目 git 活动（10 分钟内存缓存）----
+const gitCache = new Map<string, { at: number; commits: { ts: number; lines: number }[] }>()
+
+async function gitActivity(projectPath: string, sinceDays: number): Promise<{ ts: number; lines: number }[]> {
+  const hit = gitCache.get(projectPath)
+  if (hit && Date.now() - hit.at < 600_000) return hit.commits
+  const commits: { ts: number; lines: number }[] = []
+  try {
+    // 只算本机 git 身份的提交：团队仓库里同事的提交不归为「我的代码产出」
+    let authorArgs: string[] = []
+    try {
+      const { stdout: email } = await execFileAsync('git', ['-C', projectPath, 'config', 'user.email'], { timeout: 3000 })
+      if (email.trim()) authorArgs = [`--author=${email.trim()}`]
+    } catch { /* 未配置则不过滤 */ }
+    const { stdout } = await execFileAsync('git', [
+      '-C', projectPath, 'log', `--since=${Math.trunc(sinceDays)} days ago`, ...authorArgs,
+      '--pretty=format:COMMIT %aI', '--shortstat',
+    ], { timeout: 5000, maxBuffer: 8 * 1024 * 1024 })
+    let cur: { ts: number; lines: number } | null = null
+    for (const line of stdout.split('\n')) {
+      if (line.startsWith('COMMIT ')) {
+        cur = { ts: new Date(line.slice(7)).getTime(), lines: 0 }
+        commits.push(cur)
+      } else if (cur && line.includes('changed')) {
+        const ins = line.match(/(\d+) insertion/)
+        const del = line.match(/(\d+) deletion/)
+        cur.lines = (ins ? Number(ins[1]) : 0) + (del ? Number(del[1]) : 0)
+      }
+    }
+  } catch { /* 非 git 目录/超时：空 */ }
+  gitCache.set(projectPath, { at: Date.now(), commits })
+  return commits
 }
 
 // ---- 项目成本榜：同项目可能用多模型，按 (项目,模型) 分桶算成本再汇总 ----
