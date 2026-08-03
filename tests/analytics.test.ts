@@ -44,6 +44,12 @@ beforeAll(async () => {
   const pkB = dbmod.saveSessionMeta('codex', { sessionId: 'an-b', projectPath: '/data/nogit', startedAt: at(5, 22), title: 'B', model: 'gpt-5' })
   dbmod.appendMessage(pkB, 1, { role: 'assistant', ts: at(5, 22), blocks: [{ type: 'text', text: '干活' }], usage: { input: 2000, output: 800 } })
 
+  // codex 会话（git 项目）：token 在 metrics 采样表，消息无 usage_json
+  const pkC = dbmod.saveSessionMeta('codex', { sessionId: 'an-c', projectPath: gitRepo, startedAt: at(3, 14), title: 'C', model: 'gpt-5' })
+  dbmod.appendMetric(pkC, { ts: at(3, 13), cumInput: 1000, cumOutput: 500 })
+  dbmod.appendMetric(pkC, { ts: at(3, 14), cumInput: 3000, cumOutput: 1500 })
+  dbmod.setCumulativeUsage(pkC, { input: 3000, output: 1500, cacheRead: 0 })
+
   // subagent 会话：不应进分析
   const pkSub = dbmod.saveSessionMeta('pi', { sessionId: 'an-sub', projectPath: gitRepo, startedAt: at(3, 14), title: 'sub', parentSessionId: 'an-a' })
   dbmod.appendMessage(pkSub, 1, { role: 'assistant', ts: at(3, 14), blocks: [{ type: 'text', text: 'sub 消息' }], usage: { input: 99999, output: 99999 } })
@@ -73,7 +79,8 @@ describe('模型对比', () => {
     expect(a.output_tokens).toBe(500)
     expect(a.cost).toBeGreaterThan(0)
     expect(a.avg_corrections).toBe(2) // "不对，重来" 命中 wrong+redo 两条规则
-    expect(b.sessions).toBe(1)
+    expect(b.sessions).toBe(2) // an-b + an-c（codex）
+    expect(b.output_tokens).toBe(2300) // 800 + 1500
     expect(b.avg_corrections).toBe(0)
     // subagent 的 99999 token 不进任何模型统计
     expect(rows.every((r: any) => r.output_tokens < 99999)).toBe(true)
@@ -86,7 +93,7 @@ describe('项目成本榜', () => {
     const rows = await res.json()
     expect(rows.length).toBe(2)
     const git = rows.find((r: any) => r.project_path === gitRepo)
-    expect(git.sessions).toBe(1) // subagent 不算
+    expect(git.sessions).toBe(2) // an-a + an-c，subagent 不算
     expect(git.cost).toBeGreaterThan(0)
   })
 })
@@ -99,6 +106,14 @@ describe('项目下钻（成本 vs commit）', () => {
     expect(body.daily.length).toBeGreaterThan(0)
     const totalCommits = body.commits.reduce((s: number, c: any) => s + c.n, 0)
     expect(totalCommits).toBe(2)
+  })
+
+  it('codex 项目的 metrics 差分也进成本曲线', async () => {
+    const res = await app.request(`/api/analytics/project?path=${encodeURIComponent(gitRepo)}`)
+    const body = await res.json()
+    // 消息 usage（500 out）+ codex metrics 差分（1000 out）= 1500 output tokens
+    const total = body.daily.reduce((s: number, d: any) => s + d.output_tokens, 0)
+    expect(total).toBe(1500)
   })
 
   it('非 git 目录降级为空 commits', async () => {

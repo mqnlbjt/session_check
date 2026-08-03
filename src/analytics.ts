@@ -110,6 +110,31 @@ export async function projectDetail(path: string) {
       byDay.set(r.d, agg)
     } catch { /* 坏行跳过 */ }
   }
+
+  // codex 的 token 在 metrics 累计采样：按会话差分归属到后一个采样点那天（与大盘同口径）
+  const metricRows = db.prepare(`
+    SELECT m.session_id, date(m.ts, 'localtime') d, m.ts, m.cum_input, m.cum_output,
+           s.model, s.input_tokens s_in, s.cache_read s_cache
+    FROM metrics m JOIN sessions s ON s.id = m.session_id
+    WHERE s.project_path = ? AND s.${MAIN_ONLY} AND m.ts >= datetime('now', '-100 days')
+    ORDER BY m.session_id, m.ts
+  `).all(path) as { session_id: string; d: string; ts: string; cum_input: number; cum_output: number; model: string | null; s_in: number; s_cache: number }[]
+  let prevMetric: (typeof metricRows)[number] | null = null
+  for (const r of metricRows) {
+    if (prevMetric && prevMetric.session_id === r.session_id) {
+      const dIn = r.cum_input - prevMetric.cum_input
+      const dOut = r.cum_output - prevMetric.cum_output
+      // 只统计 90 天窗口内的增量（多取 10 天是为拿到窗口前的基准采样点）
+      if (dIn >= 0 && dOut >= 0 && (dIn + dOut) > 0 && r.ts >= new Date(Date.now() - 90 * 86400000).toISOString()) {
+        const ratio = r.s_in > 0 ? Math.min(1, r.s_cache / r.s_in) : 0
+        const agg = byDay.get(r.d) ?? { cost: 0, output_tokens: 0 }
+        agg.cost += costOf(r.model, dIn, dOut, Math.round(dIn * ratio)) ?? 0
+        agg.output_tokens += dOut
+        byDay.set(r.d, agg)
+      }
+    }
+    prevMetric = r
+  }
   const daily = [...byDay.entries()].map(([d, v]) => ({ d, cost: Math.round(v.cost * 100) / 100, output_tokens: v.output_tokens })).sort((a, b) => a.d.localeCompare(b.d))
 
   // commit 曲线：失败/非 git 仓库降级为空（前端只显示成本）；异步不阻塞事件循环
