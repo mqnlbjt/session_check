@@ -8,7 +8,7 @@
 - 防呆规则生成（LLM）：`POST /api/harness/generate { project_path }` → 聚合该项目 top correction 信号（规则+频次+snippet 样本）→ headless agent（复用 review.ts runCli 逻辑）→ 返回 1-3 条规则文案（JSON 数组）→ 存 suggestions（pending）；后台异步，前端轮询
 - 生成用的 agent：该项目会话数最多的 agent
 - LLM 调用可注入（测试用假实现，不真 spawn）
-- 模型建议（纯数据）：基于 modelCompare，成本高且 avg_corrections ≥1 → 生成建议文案（有更便宜且纠正率更低的替代时），随 GET 返回，不落库
+- 模型建议（纯数据）：基于 modelCompare，成本 >$20 且存在「质量相当但成本低 >50%」的替代（平均纠正率容差 +0.2、替代会话数 ≥5）→ 生成建议文案，随 GET 返回，不落库（注：初版要求 avg_corrections ≥1，实测后发现「纠正率相当但贵 17 倍」同样值得建议，故放宽）
 - `GET /api/harness/suggestions`：pending 优先 + modelAdvice
 - `POST /api/harness/suggestions/:id/adopt`：复用 persistToInstructions 写入项目 AGENTS.md 标记块，状态→adopted 记 adopted_to
 - `POST /api/harness/suggestions/:id/dismiss`：状态→dismissed

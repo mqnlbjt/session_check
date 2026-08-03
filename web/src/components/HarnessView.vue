@@ -12,9 +12,11 @@ interface Suggestion {
   adopted_to: string | null
 }
 interface ModelAdvice { content: string; evidence: string }
+interface Candidate { project_path: string; corrections: number }
 
 const suggestions = ref<Suggestion[]>([])
 const modelAdvice = ref<ModelAdvice[]>([])
+const candidates = ref<Candidate[]>([])
 const loading = ref(true)
 const generatingFor = ref<string | null>(null)
 const showDismissed = ref(false)
@@ -32,14 +34,15 @@ async function load() {
     const d = await fetch('/api/harness/suggestions').then((r) => r.json())
     suggestions.value = d.suggestions
     modelAdvice.value = d.modelAdvice
+    candidates.value = d.candidates ?? []
   } finally {
     loading.value = false
   }
 }
 onMounted(load)
 
-// 生成后轮询等新建议（LLM 要 1-3 分钟）
-let poll: ReturnType<typeof setTimeout> | null = null
+// 生成后轮询等新建议（LLM 要 1-3 分钟）；句柄用 Set 防多链并发生成时泄漏
+const polls = new Set<ReturnType<typeof setTimeout>>()
 async function generate(projectPath: string) {
   generatingFor.value = projectPath
   feedback.value = ''
@@ -60,16 +63,19 @@ async function generate(projectPath: string) {
         feedback.value = '新建议已生成'
         return
       }
-      if (Date.now() < deadline) poll = setTimeout(tick, 4000)
-      else { generatingFor.value = null; feedback.value = '生成超时或无新建议' }
+      if (Date.now() < deadline) {
+        const t = setTimeout(() => { polls.delete(t); tick() }, 4000)
+        polls.add(t)
+      } else { generatingFor.value = null; feedback.value = '生成超时或无新建议（可能与已有建议重复）' }
     }
-    poll = setTimeout(tick, 4000)
+    const t0 = setTimeout(() => { polls.delete(t0); tick() }, 4000)
+    polls.add(t0)
   } catch (e: any) {
     generatingFor.value = null
     feedback.value = `生成失败：${e?.message ?? '未知错误'}`
   }
 }
-onUnmounted(() => { if (poll) clearTimeout(poll) })
+onUnmounted(() => { for (const t of polls) clearTimeout(t); polls.clear() })
 
 async function adopt(s: Suggestion) {
   const res = await fetch(`/api/harness/suggestions/${s.id}/adopt`, { method: 'POST' })
@@ -84,6 +90,7 @@ async function adopt(s: Suggestion) {
 
 async function dismiss(s: Suggestion) {
   await fetch(`/api/harness/suggestions/${s.id}/dismiss`, { method: 'POST' })
+  feedback.value = '已忽略'
   await load()
 }
 
@@ -120,9 +127,20 @@ function shortPath(p: string) {
       <!-- 防呆规则建议 -->
       <section class="card">
         <h3 class="c-title mono">防呆规则 · 由纠正信号驱动</h3>
-        <div v-if="!pending.length" class="hint">
-          暂无待处理建议。到「分析」页看哪个项目纠正信号多，回这里点「生成建议」。
+
+        <!-- 生成入口：有纠正信号的项目（C1 修复：不依赖已有建议） -->
+        <div class="gen-panel">
+          <span class="gen-label mono">生成建议：</span>
+          <button
+            v-for="cand in candidates" :key="cand.project_path"
+            class="btn gen mono"
+            :disabled="generatingFor === cand.project_path"
+            :title="cand.project_path"
+            @click="generate(cand.project_path)"
+          >{{ generatingFor === cand.project_path ? '生成中…' : `${shortPath(cand.project_path)} ↺${cand.corrections}` }}</button>
         </div>
+
+        <div v-if="!pending.length" class="hint">暂无待处理建议。点上方项目按钮，用该项目的纠正信号生成防呆规则。</div>
 
         <div v-for="proj in pendingProjects" :key="proj" class="proj-group">
           <div class="proj-head mono">{{ shortPath(proj) }}</div>
@@ -136,15 +154,7 @@ function shortPath(p: string) {
           </div>
         </div>
 
-        <!-- 生成入口：有待建议项目时可重新生成；无建议时也可以手动生成 -->
-        <div class="gen-row">
-          <button
-            v-for="proj in pendingProjects" :key="'gen-' + proj"
-            class="btn gen mono"
-            :disabled="generatingFor === proj"
-            @click="generate(proj)"
-          >{{ generatingFor === proj ? '生成中…' : `↻ 重新生成 ${shortPath(proj)}` }}</button>
-        </div>
+        <!-- 底部不再单独放重新生成入口（已并入顶部生成面板） -->
       </section>
 
       <!-- 已采纳 -->
@@ -207,7 +217,8 @@ function shortPath(p: string) {
 .btn.adopt:hover { background: rgba(232, 163, 61, 0.12); }
 .btn.gen { margin-right: 8px; }
 .btn:disabled { opacity: 0.5; cursor: wait; }
-.gen-row { margin-top: 10px; }
+.gen-panel { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
+.gen-label { font-size: 10px; color: var(--faint); }
 
 .done-item { display: flex; gap: 10px; padding: 7px 4px; border-bottom: 1px solid var(--line); font-size: 12px; align-items: baseline; }
 .done-item:last-child { border-bottom: none; }

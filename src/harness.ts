@@ -48,14 +48,15 @@ const defaultLlm: LlmFn = (agent, prompt) =>
     })
   })
 
-// 从输出里提取 JSON 字符串数组（容错：只接受纯字符串数组）
+// 从输出里提取 JSON 字符串数组（容错：从第一个 [ 到最后一个 ]，容忍规则文案里的 ])
 export function parseRulesJson(text: string): string[] {
-  const m = text.match(/\[[\s\S]*?\]/)
-  if (!m) return []
+  const start = text.indexOf('[')
+  const end = text.lastIndexOf(']')
+  if (start < 0 || end <= start) return []
   try {
-    const arr = JSON.parse(m[0])
+    const arr = JSON.parse(text.slice(start, end + 1))
     if (!Array.isArray(arr)) return []
-    return arr.filter((x): x is string => typeof x === 'string' && x.trim().length > 4).slice(0, 5)
+    return arr.filter((x): x is string => typeof x === 'string' && x.trim().length > 4).slice(0, 3)
   } catch { return [] }
 }
 
@@ -113,9 +114,15 @@ export async function generateGuardRules(projectPath: string, llm: LlmFn = defau
   const insert = db.prepare(
     `INSERT INTO suggestions (project_path, kind, content, evidence, status, created_at) VALUES (?, 'guard_rule', ?, ?, 'pending', ?)`
   )
+  const dup = db.prepare(`SELECT 1 FROM suggestions WHERE project_path = ? AND content = ? AND status = 'pending' LIMIT 1`)
   const now = new Date().toISOString()
-  for (const rule of rules) insert.run(projectPath, rule, evidence, now)
-  return rules
+  const added: string[] = []
+  for (const rule of rules) {
+    if (dup.get(projectPath, rule)) continue // 与现有 pending 去重
+    insert.run(projectPath, rule, evidence, now)
+    added.push(rule)
+  }
+  return added
 }
 
 // 模型建议：纯数据。成本高 + 存在「质量相当但便宜得多」的替代 → 建议
@@ -145,7 +152,14 @@ export function listSuggestions() {
   const suggestions = db.prepare(
     `SELECT * FROM suggestions ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'adopted' THEN 1 ELSE 2 END, created_at DESC`
   ).all()
-  return { suggestions, modelAdvice: modelAdvice() }
+  // 生成入口候选：有纠正信号的项目（前端「生成建议」按钮列表）
+  const candidates = db.prepare(`
+    SELECT s.project_path, COUNT(*) corrections FROM signals sig
+    JOIN sessions s ON s.id = sig.session_id
+    WHERE sig.kind = 'correction' AND s.project_path IS NOT NULL
+    GROUP BY s.project_path ORDER BY corrections DESC LIMIT 10
+  `).all()
+  return { suggestions, modelAdvice: modelAdvice(), candidates }
 }
 
 export function adoptSuggestion(id: number): { adopted_to: string } | null {

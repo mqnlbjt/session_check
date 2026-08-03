@@ -120,9 +120,13 @@ app.post('/api/harness/generate', async (c) => {
 })
 
 app.post('/api/harness/suggestions/:id/adopt', (c) => {
-  const r = adoptSuggestion(Number(c.req.param('id')))
-  if (!r) return c.json({ error: '建议不存在或已处理' }, 404)
-  return c.json(r)
+  try {
+    const r = adoptSuggestion(Number(c.req.param('id')))
+    if (!r) return c.json({ error: '建议不存在或已处理' }, 404)
+    return c.json(r)
+  } catch (e: any) {
+    return c.json({ error: `写入失败：${e?.message ?? '未知错误'}` }, 500)
+  }
 })
 
 app.post('/api/harness/suggestions/:id/dismiss', (c) => {

@@ -141,7 +141,7 @@ Spectator 已采集 1226 个会话、13.4 万条消息（304MB），但数据价
 - **MVP 范围**：① 防呆规则建议（信号驱动 + LLM 生成文案）② 模型选择建议（纯数据）；skill 生成/开源工作流候选池 → 二期
 - **规则文案**：项目 top 纠正信号 + snippet 样本 → headless agent（复用 review.ts runCli）→ 1-3 条规则；suggestions 表缓存，手动「重新生成」才再调 LLM
 - **落地**：「采纳」→ persistToInstructions 写项目 AGENTS.md 标记块；「忽略」→ dismissed
-- **模型建议**：成本高 + avg_corrections ≥1 + 存在更便宜低纠正替代 → 模板文案，只展示
+- **模型建议**：成本 >$20 + 存在质量相当的便宜替代（纠正率容差 +0.2）→ 模板文案，只展示（初版要求 avg_corrections ≥1，实测后放宽）
 
 ## Out of Scope（期 5 二期）
 - skill 自动生成（重复会话模式蒸馏）
