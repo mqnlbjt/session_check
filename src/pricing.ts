@@ -64,9 +64,11 @@ export function findPrice(model: string | null): Price | null {
 }
 
 // 成本（USD）：cache 读 0.1x、cache 写 1.25x（claude ephemeral 口径）
+// 成本（USD）：cache 读 0.1x、cache 写 1.25x（claude ephemeral 口径）
+// 注意口径：claude/codex 上报的 input 都是「不含 cache 的净输入」，直接全价计，不能再减 cacheRead
+// （实测 12895 条消息 cacheRead > input，证明是净输入口径）
 export function costOf(model: string | null, input: number, output: number, cacheRead = 0, cacheCreation = 0): number | null {
   const p = findPrice(model)
   if (!p) return null
-  const fresh = Math.max(0, input - cacheRead)
-  return (fresh * p.in + cacheRead * p.in * 0.1 + cacheCreation * p.in * 1.25 + output * p.out) / 1e6
+  return (input * p.in + cacheRead * p.in * 0.1 + cacheCreation * p.in * 1.25 + output * p.out) / 1e6
 }
