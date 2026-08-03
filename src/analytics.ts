@@ -3,7 +3,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { db } from './db.js'
-import { costOf } from './pricing.js'
+import { costOf, findPrice } from './pricing.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -57,20 +57,25 @@ export function modelCompare() {
     `).all() as { model: string; n: number }[]).map((r) => [r.model, r.n])
   )
 
-  // 按裸名归并：token/成本/纠正直接加，TPS 按会话数加权
+  // 按裸名归并：token/成本/纠正/缓存直接加，TPS 按会话数加权
   const merged = new Map<string, {
     model: string; sessions: number; input: number; output: number
     cost: number; tpsSum: number; tpsN: number; corrections: number
+    cr: number; cc: number; saved: number
   }>()
   for (const r of rows) {
     const key = bareModel(r.model)
-    const m = merged.get(key) ?? { model: key, sessions: 0, input: 0, output: 0, cost: 0, tpsSum: 0, tpsN: 0, corrections: 0 }
+    const m = merged.get(key) ?? { model: key, sessions: 0, input: 0, output: 0, cost: 0, tpsSum: 0, tpsN: 0, corrections: 0, cr: 0, cc: 0, saved: 0 }
     m.sessions += r.sessions
     m.input += r.input
     m.output += r.output
     m.cost += costOf(r.model, r.input, r.output, r.cr, r.cc) ?? 0 // costOf 内部也去前缀，价格一致
     if (r.tps) { m.tpsSum += r.tps * r.sessions; m.tpsN += r.sessions }
     m.corrections += corrByModel.get(r.model) ?? 0
+    m.cr += r.cr
+    m.cc += r.cc
+    // 缓存节省：cache_read 按 0.1x 计费，相对全价省了 0.9x
+    m.saved += (findPrice(r.model)?.in ?? 0) * r.cr * 0.9 / 1e6
     merged.set(key, m)
   }
 
@@ -82,6 +87,10 @@ export function modelCompare() {
     cost: m.cost,
     avg_tps: m.tpsN > 0 ? Math.round((m.tpsSum / m.tpsN) * 10) / 10 : null,
     avg_corrections: Math.round((m.corrections / m.sessions) * 10) / 10,
+    cache_read: m.cr,
+    cache_creation: m.cc,
+    cache_hit_pct: m.input + m.cr > 0 ? Math.round((m.cr / (m.input + m.cr)) * 1000) / 10 : 0,
+    cache_saved: Math.round(m.saved * 10000) / 10000,
   })).sort((a, b) => b.cost - a.cost)
 }
 

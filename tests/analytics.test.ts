@@ -38,7 +38,7 @@ beforeAll(async () => {
   // 模型 A 会话（git 项目，有纠正信号）
   const pkA = dbmod.saveSessionMeta('pi', { sessionId: 'an-a', projectPath: gitRepo, startedAt: at(3, 14), title: 'A', model: 'claude-sonnet-4' })
   dbmod.appendMessage(pkA, 1, { role: 'user', ts: at(3, 14), blocks: [{ type: 'text', text: '不对，重来' }] })
-  dbmod.appendMessage(pkA, 2, { role: 'assistant', ts: at(3, 14), blocks: [{ type: 'text', text: '好的' }], usage: { input: 1000, output: 500 } })
+  dbmod.appendMessage(pkA, 2, { role: 'assistant', ts: at(3, 14), blocks: [{ type: 'text', text: '好的' }], usage: { input: 1000, output: 500, cacheRead: 4000 } })
 
   // 模型 B 会话（无 git 的项目）
   const pkB = dbmod.saveSessionMeta('codex', { sessionId: 'an-b', projectPath: '/data/nogit', startedAt: at(5, 22), title: 'B', model: 'gpt-5' })
@@ -79,6 +79,9 @@ describe('模型对比', () => {
     expect(a.output_tokens).toBe(500)
     expect(a.cost).toBeGreaterThan(0)
     expect(a.avg_corrections).toBe(2) // "不对，重来" 命中 wrong+redo 两条规则
+    // 缓存统计：4000 cache_read / (1000 净输入 + 4000) = 80% 命中率，省 4000×3×0.9/1e6
+    expect(a.cache_hit_pct).toBe(80)
+    expect(a.cache_saved).toBeCloseTo(0.0108, 6)
     expect(b.sessions).toBe(2) // an-b + an-c（codex）
     expect(b.output_tokens).toBe(2300) // 800 + 1500
     expect(b.avg_corrections).toBe(0)
