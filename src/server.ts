@@ -40,7 +40,8 @@ app.get('/api/sessions', (c) => {
   const rows = db.prepare(`
     SELECT id, agent, parent_id, label, project_path, title, model, started_at, ended_at,
            message_count, input_tokens, output_tokens, error_count, risk_count,
-           (SELECT COUNT(*) FROM sessions s2 WHERE s2.parent_id = sessions.id) subagent_count
+           (SELECT COUNT(*) FROM sessions s2 WHERE s2.parent_id = sessions.id) subagent_count,
+           (SELECT COUNT(*) FROM signals sig WHERE sig.session_id = sessions.id AND sig.kind = 'correction') correction_count
     FROM sessions ${whereSql}
     ORDER BY started_at DESC LIMIT @limit OFFSET @offset
   `).all(params) as any[]
@@ -90,6 +91,16 @@ app.get('/api/search', (c) => {
     project: c.req.query('project'),
     limit, offset,
   }))
+})
+
+// ---- 会话的返工信号明细（前端定位用）----
+app.get('/api/sessions/:id/signals', (c) => {
+  const rows = db.prepare(`
+    SELECT sig.rule, sig.kind, sig.snippet, sig.ts, m.seq
+    FROM signals sig JOIN messages m ON m.id = sig.message_id
+    WHERE sig.session_id = ? ORDER BY sig.ts, sig.id
+  `).all(c.req.param('id'))
+  return c.json(rows)
 })
 
 // ---- 单个 session 的消息流 ----
@@ -379,11 +390,34 @@ app.get('/api/overview', (c) => {
     FROM sessions WHERE ${mainOnly} GROUP BY agent
   `).all()
 
+  // 返工率周趋势：每周活跃主会话中，有 ≥1 次纠正信号的会话占比（近 12 周）
+  // 分子分母同口径：都限主会话 + 同一时间窗（评审 Critical 修复）
+  const weeklyActive = db.prepare(`
+    SELECT strftime('%Y-W%W', m.ts, 'localtime') w, COUNT(DISTINCT m.session_id) n
+    FROM messages m JOIN sessions s ON s.id = m.session_id
+    WHERE s.${mainOnly} AND m.ts >= datetime('now', '-84 days') GROUP BY w ORDER BY w
+  `).all() as { w: string; n: number }[]
+  const weeklyCorrected = new Map(
+    (db.prepare(`
+      SELECT strftime('%Y-W%W', sig.ts, 'localtime') w, COUNT(DISTINCT sig.session_id) n
+      FROM signals sig JOIN sessions s ON s.id = sig.session_id
+      WHERE sig.kind = 'correction' AND s.${mainOnly} AND sig.ts >= datetime('now', '-84 days')
+      GROUP BY w
+    `).all() as { w: string; n: number }[]).map((r) => [r.w, r.n])
+  )
+  const reworkWeekly = weeklyActive.map((r) => ({
+    w: r.w,
+    sessions: r.n,
+    corrected: weeklyCorrected.get(r.w) ?? 0,
+    rate: r.n > 0 ? Math.round(((weeklyCorrected.get(r.w) ?? 0) / r.n) * 1000) / 10 : 0,
+  }))
+
   return c.json({
     today,
     daily,
     models, projects, agents,
     active, agentErrors, topErrorSessions, riskSessions, riskTotals,
+    reworkWeekly,
   })
 })
 

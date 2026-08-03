@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref, watch } from 'vue'
-import { api, fmtTokens, type Message, type Review, type Risk, type SessionRow } from '../api'
+import { api, fmtClock, fmtTokens, type Message, type Review, type Risk, type SessionRow, type Signal } from '../api'
 import MessageItem from './MessageItem.vue'
 import ReviewPanel from './ReviewPanel.vue'
 
@@ -9,6 +9,7 @@ const props = defineProps<{ sessionId: string; liveTick?: number; jumpSeq?: numb
 const session = ref<SessionRow | null>(null)
 const messages = ref<Message[]>([])
 const risks = ref<Risk[]>([])
+const signals = ref<Signal[]>([])
 const reviews = ref<Review[]>([])
 const subs = ref<SessionRow[]>([])
 const loading = ref(true)
@@ -89,7 +90,13 @@ async function load() {
     session.value = data.session
     messages.value = data.messages
     risks.value = (data as any).risks ?? []
-    reviews.value = await api.reviews(props.sessionId).catch(() => [])
+    // 信号和复盘并行拉取，省一次 RTT
+    const [sigs, revs] = await Promise.all([
+      api.signals(props.sessionId).catch(() => []),
+      api.reviews(props.sessionId).catch(() => []),
+    ])
+    signals.value = sigs
+    reviews.value = revs
     // 主会话：拉取它的 subagent 列表；subagent：不需要
     if (!data.session.parent_id && data.session.subagent_count > 0) {
       subs.value = (await api.sessions({ parent: data.session.id, limit: 100 })).rows
@@ -177,6 +184,15 @@ const emit = defineEmits<{ select: [id: string] }>()
           :class="g.severity"
           :title="g.snippet ?? ''"
         >{{ g.rule }}<template v-if="g.count > 1"> ×{{ g.count }}</template></span>
+      </div>
+      <div v-if="signals.length" class="signals">
+        <button
+          v-for="(s, i) in signals" :key="i"
+          class="signal-chip mono"
+          :class="s.kind"
+          :title="s.snippet ?? ''"
+          @click="scrollToSeq(s.seq)"
+        >{{ s.kind === 'correction' ? '↺' : '〜' }} {{ s.rule }} · {{ fmtClock(s.ts) }}</button>
       </div>
       <div v-if="subs.length" class="subs">
         <span class="subs-label mono">SUBAGENTS</span>
@@ -289,6 +305,20 @@ const emit = defineEmits<{ select: [id: string] }>()
 }
 .risk-chip.high { color: var(--danger); border-color: rgba(225, 90, 90, 0.5); background: rgba(225, 90, 90, 0.08); }
 .risk-chip.medium { color: var(--amber); border-color: rgba(232, 163, 61, 0.4); background: rgba(232, 163, 61, 0.06); }
+
+.signals { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.signal-chip {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid;
+  cursor: pointer;
+  background: transparent;
+}
+.signal-chip.correction { color: var(--amber); border-color: rgba(232, 163, 61, 0.4); background: rgba(232, 163, 61, 0.06); }
+.signal-chip.correction:hover { background: rgba(232, 163, 61, 0.16); }
+.signal-chip.frustration { color: var(--dim); border-color: var(--line); }
+.signal-chip.frustration:hover { color: var(--text); }
 .subs-label { font-size: 10px; color: var(--faint); letter-spacing: 0.08em; }
 .sub {
   background: var(--panel-2);

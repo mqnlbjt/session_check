@@ -13,6 +13,7 @@ export interface SessionRow {
   subagent_count: number
   error_count?: number
   risk_count?: number
+  correction_count?: number // 用户纠正信号次数（返工质量分）
   spark?: number[]
   avg_tps?: number | null
 }
@@ -73,6 +74,14 @@ export interface SearchRow {
   agent: 'pi' | 'claude' | 'codex'
 }
 
+export interface Signal {
+  rule: string
+  kind: 'correction' | 'frustration'
+  snippet: string | null
+  ts: string
+  seq: number
+}
+
 export interface Stats {
   byAgent: { agent: string; sessions: number; messages: number; input_tokens: number; output_tokens: number }[]
 }
@@ -97,6 +106,8 @@ export const api = {
     get<{ session: SessionRow; messages: Message[] }>(`/api/sessions/${encodeURIComponent(id)}/messages?limit=${limit}`),
   reviews: (id: string) =>
     get<Review[]>(`/api/sessions/${encodeURIComponent(id)}/reviews`),
+  signals: (id: string) =>
+    get<Signal[]>(`/api/sessions/${encodeURIComponent(id)}/signals`),
   stats: () => get<Stats>('/api/stats'),
   search: (params: { q: string; agent?: string; project?: string; limit?: number; offset?: number }) => {
     const sp = new URLSearchParams()
