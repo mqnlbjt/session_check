@@ -99,10 +99,10 @@ app.get('/api/search', (c) => {
 app.get('/api/analytics/heatmap', (c) => c.json(heatmap()))
 app.get('/api/analytics/models', (c) => c.json(modelCompare()))
 app.get('/api/analytics/projects', (c) => c.json(projectCosts()))
-app.get('/api/analytics/project', (c) => {
+app.get('/api/analytics/project', async (c) => {
   const path = c.req.query('path')
   if (!path) return c.json({ error: 'path 必填' }, 400)
-  const detail = projectDetail(path)
+  const detail = await projectDetail(path)
   if (!detail) return c.json({ error: '未知项目路径' }, 404)
   return c.json(detail)
 })

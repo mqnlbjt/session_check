@@ -1,8 +1,11 @@
 // 分析聚合：热力图 / 模型对比 / 项目成本榜 / 项目下钻（成本 vs commit）
 // 全部主会话口径（subagent 不进统计），近 90 天
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { db } from './db.js'
 import { costOf } from './pricing.js'
+
+const execFileAsync = promisify(execFile)
 
 const MAIN_ONLY = `parent_id IS NULL AND (label IS NULL OR label NOT LIKE 'subagent%')`
 const WINDOW = `datetime('now', '-90 days')`
@@ -35,9 +38,9 @@ export function modelCompare() {
     SELECT model, COUNT(*) sessions,
            SUM(input_tokens) input, SUM(output_tokens) output,
            SUM(cache_read) cr, SUM(cache_creation) cc,
-           AVG(avg_tps) tps
+           AVG(CASE WHEN avg_tps > 0 THEN avg_tps END) tps  -- -1 是无数据哨兵，不参与平均（对齐大盘口径）
     FROM sessions
-    WHERE ${MAIN_ONLY} AND model IS NOT NULL
+    WHERE ${MAIN_ONLY} AND model IS NOT NULL AND started_at >= ${WINDOW}
     GROUP BY model
   `).all() as { model: string; sessions: number; input: number; output: number; cr: number; cc: number; tps: number | null }[]
 
@@ -68,7 +71,7 @@ export function projectCosts(limit = 20) {
            SUM(input_tokens) input, SUM(output_tokens) output,
            SUM(cache_read) cr, SUM(cache_creation) cc
     FROM sessions
-    WHERE ${MAIN_ONLY} AND project_path IS NOT NULL
+    WHERE ${MAIN_ONLY} AND project_path IS NOT NULL AND started_at >= ${WINDOW}
     GROUP BY project_path, model
   `).all() as { project_path: string; model: string | null; sessions: number; messages: number; input: number; output: number; cr: number; cc: number }[]
 
@@ -86,7 +89,7 @@ export function projectCosts(limit = 20) {
 }
 
 // ---- 项目下钻：成本曲线 + git commit 曲线（并排展示，不做归属）----
-export function projectDetail(path: string) {
+export async function projectDetail(path: string) {
   // 白名单：必须是观测过的项目路径
   const known = db.prepare(`SELECT 1 FROM sessions WHERE project_path = ? LIMIT 1`).get(path)
   if (!known) return null
@@ -99,22 +102,24 @@ export function projectDetail(path: string) {
   `).all(path) as { d: string; model: string | null; usage_json: string }[]
   const byDay = new Map<string, { cost: number; output_tokens: number }>()
   for (const r of usageRows) {
-    const u = JSON.parse(r.usage_json)
-    const agg = byDay.get(r.d) ?? { cost: 0, output_tokens: 0 }
-    agg.cost += costOf(r.model, u.input ?? 0, u.output ?? 0, u.cacheRead ?? 0, u.cacheCreation ?? 0) ?? 0
-    agg.output_tokens += u.output ?? 0
-    byDay.set(r.d, agg)
+    try {
+      const u = JSON.parse(r.usage_json)
+      const agg = byDay.get(r.d) ?? { cost: 0, output_tokens: 0 }
+      agg.cost += costOf(r.model, u.input ?? 0, u.output ?? 0, u.cacheRead ?? 0, u.cacheCreation ?? 0) ?? 0
+      agg.output_tokens += u.output ?? 0
+      byDay.set(r.d, agg)
+    } catch { /* 坏行跳过 */ }
   }
   const daily = [...byDay.entries()].map(([d, v]) => ({ d, cost: Math.round(v.cost * 100) / 100, output_tokens: v.output_tokens })).sort((a, b) => a.d.localeCompare(b.d))
 
-  // commit 曲线：失败/非 git 仓库降级为空（前端只显示成本）
+  // commit 曲线：失败/非 git 仓库降级为空（前端只显示成本）；异步不阻塞事件循环
   let commits: { d: string; n: number }[] = []
   try {
-    const out = execFileSync('git', [
+    const { stdout } = await execFileAsync('git', [
       '-C', path, 'log', '--since=90 days ago', '--date=format:%Y-%m-%d', '--format=%ad',
-    ], { timeout: 5000, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' })
+    ], { timeout: 5000, maxBuffer: 4 * 1024 * 1024 })
     const byDayCommits = new Map<string, number>()
-    for (const line of out.split('\n')) {
+    for (const line of stdout.split('\n')) {
       const d = line.trim()
       if (d) byDayCommits.set(d, (byDayCommits.get(d) ?? 0) + 1)
     }

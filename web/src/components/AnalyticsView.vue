@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api, fmtTokens } from '../api'
 
 interface HeatCell { messages: number; output_tokens: number }
@@ -32,8 +32,10 @@ onMounted(async () => {
   }
 })
 
-function heatMax(): number {
-  return Math.max(1, ...grid.value.flat().map((c) => c.messages))
+const heatMaxValue = computed(() => Math.max(1, ...grid.value.flat().map((c) => c.messages)))
+
+function heatOpacity(cell: HeatCell): number {
+  return cell.messages === 0 ? 0.08 : 0.15 + 0.85 * (cell.messages / heatMaxValue.value)
 }
 
 async function toggleProject(path: string) {
@@ -84,7 +86,7 @@ function fmtCost(c: number | null | undefined): string {
             <div
               v-for="(cell, hour) in row" :key="hour"
               class="hm-cell"
-              :style="{ opacity: cell.messages === 0 ? 0.08 : 0.15 + 0.85 * (cell.messages / heatMax()) }"
+              :style="{ opacity: heatOpacity(cell) }"
               :title="`周${DOW_LABEL[dow]} ${hour}:00 · ${cell.messages} 消息 · ${fmtTokens(cell.output_tokens)} tok`"
             ></div>
           </template>
