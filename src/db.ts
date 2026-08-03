@@ -102,6 +102,14 @@ CREATE TABLE IF NOT EXISTS signals (
   UNIQUE(session_id, message_id, rule)
 );
 CREATE INDEX IF NOT EXISTS idx_signals_session ON signals(session_id);
+
+CREATE TABLE IF NOT EXISTS janitor_log (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_at      TEXT NOT NULL,
+  sessions    INTEGER NOT NULL,
+  messages    INTEGER NOT NULL,
+  bytes_freed INTEGER NOT NULL
+);
 `)
 
 // FTS5 全文搜索：只索引 text block + tool_call 入参（thinking / tool_result 不索引）

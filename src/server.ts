@@ -9,6 +9,7 @@ import { join, resolve } from 'node:path'
 import { db, getSessionPkByPath, insertReview, searchMessages } from './db.js'
 import { costOf } from './pricing.js'
 import { startReview, reviewStatus, type EngineResult } from './review.js'
+import { renderMarkdown } from './export.js'
 import { extractLessons, persistToInstructions, persistToSkill, type PersistMode } from './persist.js'
 
 // 复盘沉淀结果（sessionPk → 写入的文件路径），供 review-status 查询
@@ -91,6 +92,22 @@ app.get('/api/search', (c) => {
     project: c.req.query('project'),
     limit, offset,
   }))
+})
+
+// ---- 会话导出 Markdown ----
+app.get('/api/sessions/:id/export.md', (c) => {
+  const id = c.req.param('id')
+  const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as any
+  if (!session) return c.json({ error: '会话不存在' }, 404)
+  const messages = db.prepare('SELECT seq, role, ts, blocks_json FROM messages WHERE session_id = ? ORDER BY seq').all(id)
+  const md = renderMarkdown(session, messages)
+  const fname = encodeURIComponent(`${(session.title ?? id).replace(/[\n"/\\]/g, ' ').slice(0, 40)}.md`)
+  return new Response(md, {
+    headers: {
+      'Content-Type': 'text/markdown; charset=utf-8',
+      'Content-Disposition': `attachment; filename*=UTF-8''${fname}`,
+    },
+  })
 })
 
 // ---- 会话的返工信号明细（前端定位用）----
