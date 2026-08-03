@@ -90,8 +90,13 @@ async function load() {
     session.value = data.session
     messages.value = data.messages
     risks.value = (data as any).risks ?? []
-    signals.value = await api.signals(props.sessionId).catch(() => [])
-    reviews.value = await api.reviews(props.sessionId).catch(() => [])
+    // 信号和复盘并行拉取，省一次 RTT
+    const [sigs, revs] = await Promise.all([
+      api.signals(props.sessionId).catch(() => []),
+      api.reviews(props.sessionId).catch(() => []),
+    ])
+    signals.value = sigs
+    reviews.value = revs
     // 主会话：拉取它的 subagent 列表；subagent：不需要
     if (!data.session.parent_id && data.session.subagent_count > 0) {
       subs.value = (await api.sessions({ parent: data.session.id, limit: 100 })).rows

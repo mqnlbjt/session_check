@@ -98,7 +98,7 @@ app.get('/api/sessions/:id/signals', (c) => {
   const rows = db.prepare(`
     SELECT sig.rule, sig.kind, sig.snippet, sig.ts, m.seq
     FROM signals sig JOIN messages m ON m.id = sig.message_id
-    WHERE sig.session_id = ? ORDER BY sig.ts
+    WHERE sig.session_id = ? ORDER BY sig.ts, sig.id
   `).all(c.req.param('id'))
   return c.json(rows)
 })
@@ -391,15 +391,18 @@ app.get('/api/overview', (c) => {
   `).all()
 
   // 返工率周趋势：每周活跃主会话中，有 ≥1 次纠正信号的会话占比（近 12 周）
+  // 分子分母同口径：都限主会话 + 同一时间窗（评审 Critical 修复）
   const weeklyActive = db.prepare(`
     SELECT strftime('%Y-W%W', m.ts, 'localtime') w, COUNT(DISTINCT m.session_id) n
     FROM messages m JOIN sessions s ON s.id = m.session_id
-    WHERE s.${mainOnly} AND m.ts >= datetime('now', '-84 days') GROUP BY w
+    WHERE s.${mainOnly} AND m.ts >= datetime('now', '-84 days') GROUP BY w ORDER BY w
   `).all() as { w: string; n: number }[]
   const weeklyCorrected = new Map(
     (db.prepare(`
-      SELECT strftime('%Y-W%W', ts, 'localtime') w, COUNT(DISTINCT session_id) n
-      FROM signals WHERE kind = 'correction' GROUP BY w
+      SELECT strftime('%Y-W%W', sig.ts, 'localtime') w, COUNT(DISTINCT sig.session_id) n
+      FROM signals sig JOIN sessions s ON s.id = sig.session_id
+      WHERE sig.kind = 'correction' AND s.${mainOnly} AND sig.ts >= datetime('now', '-84 days')
+      GROUP BY w
     `).all() as { w: string; n: number }[]).map((r) => [r.w, r.n])
   )
   const reworkWeekly = weeklyActive.map((r) => ({
