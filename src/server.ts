@@ -6,7 +6,7 @@ import { streamSSE } from 'hono/streaming'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { db, getSessionPkByPath, insertReview } from './db.js'
+import { db, getSessionPkByPath, insertReview, searchMessages } from './db.js'
 import { costOf } from './pricing.js'
 import { startReview, reviewStatus, type EngineResult } from './review.js'
 import { extractLessons, persistToInstructions, persistToSkill, type PersistMode } from './persist.js'
@@ -16,7 +16,7 @@ export const lastPersist = new Map<string, string>()
 import { scanAll, backfillAllTitles } from './ingest.js'
 import { startWatch } from './watch.js'
 
-const app = new Hono()
+export const app = new Hono()
 app.use('/api/*', cors())
 
 // ---- sessions 列表：默认只列主会话；?parent=<id> 看某会话的 subagent；?all=1 全部 ----
@@ -71,6 +71,25 @@ app.get('/api/sessions', (c) => {
     }
   }
   return c.json({ total, rows })
+})
+
+// ---- 全文搜索：?q= 必填，&agent= &project= 过滤 ----
+// limit/offset 做下限和整数校验：-1 在 SQLite 里是「无限制」，NaN/小数会直接 500
+function clampPage(raw: string | undefined, def: number, max: number): number {
+  const n = Number(raw ?? def)
+  if (!Number.isInteger(n) || n < 1) return def
+  return Math.min(n, max)
+}
+app.get('/api/search', (c) => {
+  const q = (c.req.query('q') ?? '').trim()
+  if (!q) return c.json({ total: 0, rows: [] })
+  const limit = clampPage(c.req.query('limit'), 30, 100)
+  const offset = Math.max(0, Math.trunc(Number(c.req.query('offset') ?? 0)) || 0)
+  return c.json(searchMessages(q, {
+    agent: c.req.query('agent'),
+    project: c.req.query('project'),
+    limit, offset,
+  }))
 })
 
 // ---- 单个 session 的消息流 ----

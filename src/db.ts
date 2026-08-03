@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import type { AgentType, NormalizedMessage, Usage } from './model.js'
+import type { AgentType, Block, NormalizedMessage, Usage } from './model.js'
 import { scanBlocks } from './rules.js'
 
 const DB_PATH = process.env.SPECTATOR_DB ?? join(homedir(), 'data', 'spectator', 'spectator.db')
@@ -90,6 +90,102 @@ CREATE TABLE IF NOT EXISTS reviews (
 );
 CREATE INDEX IF NOT EXISTS idx_reviews_session ON reviews(session_id);
 `)
+
+// FTS5 全文搜索：只索引 text block + tool_call 入参（thinking / tool_result 不索引）
+// trigram 分词：中文可子串匹配，代价是查询需 ≥3 字符（短查询走 LIKE 降级）
+db.exec(`
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+  content,
+  session_id UNINDEXED,
+  message_id UNINDEXED,
+  tokenize='trigram'
+)`)
+
+// rowid 直接复用 messages.id：反连接查漏和 JOIN 都能走 rowid 索引，避免全表扫描
+const insertFts = db.prepare(`INSERT INTO messages_fts (rowid, content, session_id, message_id) VALUES (?, ?, ?, ?)`)
+
+// 从 blocks 提取可索引文本：人话 + 工具入参
+export function searchableText(blocks: Block[]): string {
+  const parts: string[] = []
+  for (const b of blocks) {
+    if (b.type === 'text' && b.text) parts.push(b.text)
+    else if (b.type === 'tool_call') {
+      const inp = typeof b.input === 'string' ? b.input : JSON.stringify(b.input ?? '')
+      parts.push(`${b.name ?? ''} ${inp}`)
+    }
+  }
+  return parts.join('\n')
+}
+
+// 老数据回填 FTS；空文本消息插占位行（tombstone）保证幂等，返回本次实际索引条数
+export function backfillFts(): number {
+  const pending = db.prepare(`
+    SELECT m.id, m.session_id, m.blocks_json AS bj FROM messages m
+    LEFT JOIN messages_fts f ON f.rowid = m.id
+    WHERE f.rowid IS NULL LIMIT 1000
+  `)
+  let indexed = 0
+  const tx = db.transaction((rows: { id: number; session_id: string; bj: string }[]) => {
+    for (const r of rows) {
+      const text = searchableText(JSON.parse(r.bj))
+      insertFts.run(r.id, text, r.session_id, r.id)
+      if (text.trim()) indexed++
+    }
+  })
+  while (true) {
+    const rows = pending.all() as { id: number; session_id: string; bj: string }[]
+    if (!rows.length) break
+    tx(rows)
+  }
+  return indexed
+}
+
+export interface SearchOpts { agent?: string; project?: string; limit?: number; offset?: number }
+
+// 全文搜索：≥3 字符走 FTS（整串作短语子串匹配），短查询降级 LIKE blocks_json
+export function searchMessages(q: string, opts: SearchOpts = {}) {
+  const { agent, project, limit = 30, offset = 0 } = opts
+  const filters: string[] = []
+  const params: Record<string, unknown> = { limit, offset }
+  if (agent) { filters.push('s.agent = @agent'); params.agent = agent }
+  if (project) { filters.push('s.project_path LIKE @project'); params.project = `%${project}%` }
+  const extra = filters.length ? ' AND ' + filters.join(' AND ') : ''
+
+  const isFtsAble = [...q.replace(/\s+/g, '')].length >= 3
+  if (isFtsAble) {
+    params.match = `"${q.replace(/"/g, '')}"`
+    const where = `messages_fts MATCH @match${extra}`
+    const total = (db.prepare(
+      `SELECT COUNT(*) n FROM messages_fts f JOIN sessions s ON s.id = f.session_id WHERE ${where}`
+    ).get(params) as any).n
+    const rows = db.prepare(`
+      SELECT m.id AS message_id, m.session_id, m.seq, m.role, m.ts,
+             snippet(messages_fts, 0, '<mark>', '</mark>', '…', 24) AS snippet,
+             s.title AS session_title, s.project_path, s.agent
+      FROM messages_fts f
+      JOIN messages m ON m.id = f.rowid
+      JOIN sessions s ON s.id = f.session_id
+      WHERE ${where}
+      ORDER BY m.ts DESC LIMIT @limit OFFSET @offset
+    `).all(params)
+    return { total, rows }
+  }
+  // LIKE 降级：转义通配符，直接扫 blocks_json（短查询不频繁，可接受）
+  params.like = `%${q.replace(/[%_\\]/g, (ch) => '\\' + ch)}%`
+  const where = `m.blocks_json LIKE @like ESCAPE '\\'${extra}`
+  const total = (db.prepare(
+    `SELECT COUNT(*) n FROM messages m JOIN sessions s ON s.id = m.session_id WHERE ${where}`
+  ).get(params) as any).n
+  const rows = db.prepare(`
+    SELECT m.id AS message_id, m.session_id, m.seq, m.role, m.ts,
+           substr(m.blocks_json, 1, 200) AS snippet,
+           s.title AS session_title, s.project_path, s.agent
+    FROM messages m JOIN sessions s ON s.id = m.session_id
+    WHERE ${where}
+    ORDER BY m.ts DESC LIMIT @limit OFFSET @offset
+  `).all(params)
+  return { total, rows }
+}
 
 const upsertSession = db.prepare(`
 INSERT INTO sessions (id, agent, parent_id, label, project_path, title, model, started_at, ended_at)
@@ -201,8 +297,8 @@ export function saveSessionMeta(agent: AgentType, meta: { sessionId: string; pro
   return `${agent}:${meta.sessionId}`
 }
 
-export function appendMessage(sessionPk: string, seq: number, msg: NormalizedMessage) {
-  // 入库前实时过监控规则：工具错误计数 + 危险操作/密钥扫描
+// 消息+FTS+统计+风险同一事务：崩溃不会留下已写消息但未索引的中间态
+const appendTx = db.transaction((sessionPk: string, seq: number, msg: NormalizedMessage) => {
   const errors = msg.blocks.filter((b) => b.type === 'tool_result' && b.isError).length
   const riskHits = scanBlocks(msg.blocks)
 
@@ -217,6 +313,11 @@ export function appendMessage(sessionPk: string, seq: number, msg: NormalizedMes
     usage_json: msg.usage ? JSON.stringify(msg.usage) : null,
   })
   if (info.changes > 0) {
+    const text = searchableText(msg.blocks)
+    if (text.trim()) {
+      const mid = Number(info.lastInsertRowid)
+      insertFts.run(mid, text, sessionPk, mid)
+    }
     bumpSession.run({
       id: sessionPk,
       ts: msg.ts,
@@ -232,6 +333,11 @@ export function appendMessage(sessionPk: string, seq: number, msg: NormalizedMes
     }
   }
   return info.changes > 0
+})
+
+export function appendMessage(sessionPk: string, seq: number, msg: NormalizedMessage) {
+  // 入库前实时过监控规则：工具错误计数 + 危险操作/密钥扫描（在事务内执行）
+  return appendTx(sessionPk, seq, msg)
 }
 
 // codex 的 token_count 是累计值，直接覆盖而不是累加

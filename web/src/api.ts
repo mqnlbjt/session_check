@@ -61,6 +61,18 @@ export interface Message {
   tps?: number
 }
 
+export interface SearchRow {
+  message_id: number
+  session_id: string
+  seq: number
+  role: string
+  ts: string
+  snippet: string // FTS 高亮片段，含 <mark> 标签（渲染前需转义处理）
+  session_title: string | null
+  project_path: string | null
+  agent: 'pi' | 'claude' | 'codex'
+}
+
 export interface Stats {
   byAgent: { agent: string; sessions: number; messages: number; input_tokens: number; output_tokens: number }[]
 }
@@ -86,6 +98,15 @@ export const api = {
   reviews: (id: string) =>
     get<Review[]>(`/api/sessions/${encodeURIComponent(id)}/reviews`),
   stats: () => get<Stats>('/api/stats'),
+  search: (params: { q: string; agent?: string; project?: string; limit?: number; offset?: number }) => {
+    const sp = new URLSearchParams()
+    sp.set('q', params.q)
+    if (params.agent) sp.set('agent', params.agent)
+    if (params.project) sp.set('project', params.project)
+    sp.set('limit', String(params.limit ?? 30))
+    sp.set('offset', String(params.offset ?? 0))
+    return get<{ total: number; rows: SearchRow[] }>(`/api/search?${sp}`)
+  },
 }
 
 export function fmtTokens(n: number): string {
