@@ -12,6 +12,7 @@ const total = ref(0)
 const searched = ref(false)
 const loading = ref(false)
 const loadingMore = ref(false)
+const errorMsg = ref('')
 
 const AGENTS = [
   { value: '', label: '全部' },
@@ -22,8 +23,9 @@ const AGENTS = [
 
 async function run(reset = true) {
   const query = q.value.trim()
-  if (!query) { rows.value = []; total.value = 0; searched.value = false; return }
+  if (!query) { rows.value = []; total.value = 0; searched.value = false; errorMsg.value = ''; return }
   if (reset) { loading.value = true; rows.value = [] } else loadingMore.value = true
+  errorMsg.value = ''
   try {
     const data = await api.search({
       q: query,
@@ -34,6 +36,8 @@ async function run(reset = true) {
     total.value = data.total
     rows.value = reset ? data.rows : [...rows.value, ...data.rows]
     searched.value = true
+  } catch (e: any) {
+    errorMsg.value = `搜索失败：${e?.message ?? '未知错误'}`
   } finally {
     loading.value = false
     loadingMore.value = false
@@ -81,6 +85,7 @@ const ROLE_LABEL: Record<string, string> = { user: '用户', assistant: '助手'
     </div>
 
     <div v-if="loading" class="hint">搜索中…</div>
+    <div v-else-if="errorMsg" class="hint err">{{ errorMsg }}</div>
     <div v-else-if="!searched" class="hint">输入关键词搜索全部会话的消息正文和工具命令</div>
     <div v-else-if="!rows.length" class="hint">没有匹配的消息</div>
 
@@ -147,6 +152,7 @@ const ROLE_LABEL: Record<string, string> = { user: '用户', assistant: '助手'
 
 .count { font-size: 11px; color: var(--faint); margin-bottom: 10px; }
 .hint { padding: 40px 0; text-align: center; font-size: 12px; color: var(--dim); }
+.hint.err { color: var(--danger); }
 
 .hit {
   display: block;

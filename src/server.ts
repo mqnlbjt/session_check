@@ -74,11 +74,17 @@ app.get('/api/sessions', (c) => {
 })
 
 // ---- 全文搜索：?q= 必填，&agent= &project= 过滤 ----
+// limit/offset 做下限和整数校验：-1 在 SQLite 里是「无限制」，NaN/小数会直接 500
+function clampPage(raw: string | undefined, def: number, max: number): number {
+  const n = Number(raw ?? def)
+  if (!Number.isInteger(n) || n < 1) return def
+  return Math.min(n, max)
+}
 app.get('/api/search', (c) => {
   const q = (c.req.query('q') ?? '').trim()
   if (!q) return c.json({ total: 0, rows: [] })
-  const limit = Math.min(Number(c.req.query('limit') ?? 30), 100)
-  const offset = Number(c.req.query('offset') ?? 0)
+  const limit = clampPage(c.req.query('limit'), 30, 100)
+  const offset = Math.max(0, Math.trunc(Number(c.req.query('offset') ?? 0)) || 0)
   return c.json(searchMessages(q, {
     agent: c.req.query('agent'),
     project: c.req.query('project'),

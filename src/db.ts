@@ -170,9 +170,9 @@ export function searchMessages(q: string, opts: SearchOpts = {}) {
     `).all(params)
     return { total, rows }
   }
-  // LIKE 降级：直接扫 blocks_json（短查询不频繁，可接受）
-  params.like = `%${q}%`
-  const where = `m.blocks_json LIKE @like${extra}`
+  // LIKE 降级：转义通配符，直接扫 blocks_json（短查询不频繁，可接受）
+  params.like = `%${q.replace(/[%_\\]/g, (ch) => '\\' + ch)}%`
+  const where = `m.blocks_json LIKE @like ESCAPE '\\'${extra}`
   const total = (db.prepare(
     `SELECT COUNT(*) n FROM messages m JOIN sessions s ON s.id = m.session_id WHERE ${where}`
   ).get(params) as any).n
@@ -297,8 +297,8 @@ export function saveSessionMeta(agent: AgentType, meta: { sessionId: string; pro
   return `${agent}:${meta.sessionId}`
 }
 
-export function appendMessage(sessionPk: string, seq: number, msg: NormalizedMessage) {
-  // 入库前实时过监控规则：工具错误计数 + 危险操作/密钥扫描
+// 消息+FTS+统计+风险同一事务：崩溃不会留下已写消息但未索引的中间态
+const appendTx = db.transaction((sessionPk: string, seq: number, msg: NormalizedMessage) => {
   const errors = msg.blocks.filter((b) => b.type === 'tool_result' && b.isError).length
   const riskHits = scanBlocks(msg.blocks)
 
@@ -333,6 +333,11 @@ export function appendMessage(sessionPk: string, seq: number, msg: NormalizedMes
     }
   }
   return info.changes > 0
+})
+
+export function appendMessage(sessionPk: string, seq: number, msg: NormalizedMessage) {
+  // 入库前实时过监控规则：工具错误计数 + 危险操作/密钥扫描（在事务内执行）
+  return appendTx(sessionPk, seq, msg)
 }
 
 // codex 的 token_count 是累计值，直接覆盖而不是累加

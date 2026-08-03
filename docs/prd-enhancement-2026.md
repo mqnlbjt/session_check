@@ -117,6 +117,7 @@ Spectator 已采集 1226 个会话、13.4 万条消息（304MB），但数据价
 
 ## Out of Scope
 
+- 时间过滤 from/to（实现时裁掉，期 1 用不上；需要时再补）
 - 自动 LLM 复盘（grill 决策：复盘保持手动触发，信号检测先行验证）
 - 工具输出内容搜索（grill 决策：不索引 tool_result；如未来需要可开 hybrid 降级查询）
 - commit 到会话的归属算法（grill 决策：只并排展示）
@@ -126,7 +127,7 @@ Spectator 已采集 1226 个会话、13.4 万条消息（304MB），但数据价
 
 ## Further Notes
 
-- **中文分词决策点**：FTS5 的 `unicode61` 对中文按整段切（无空格不分词），`trigram` 支持子串匹配但索引更大（~50MB 源 → 估 80-120MB 索引）。实现时先 trigram，回填后实测体积，超 150MB 再评估 jieba 分词扩展。
+- **中文分词决策点**：已选 trigram，实测索引 162MB（content 57MB + data 103MB），略超 150MB 预估——评审后决定接受：期 3 清工具输出后净 db 反而变小，且 contentless 模式会牺牲 snippet 高亮。短查询（<3 字符）走 LIKE 降级兜底。
 - 信号检测误报风险：用户引用别人的话、代码里的字符串可能误命中。先跑回填看 Top 命中，误报多就收紧规则再上线。
 - janitor 清 90 天是按 `started_at` 还是 `ended_at`：用 `COALESCE(ended_at, started_at)`，避免长跑会话被误清。
 - 四期的 db schema 变更逐期叠加（FTS 虚表 → signals 表 → janitor_log 表），都用 `IF NOT EXISTS` 轻迁移风格，与现有 db.ts 一致。

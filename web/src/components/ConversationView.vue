@@ -107,18 +107,22 @@ onMounted(load)
 watch(() => props.sessionId, load)
 
 // 搜索跳转定位：消息加载后滚动到 data-seq 对应的消息并闪烁高亮
+// 定位一次即消费：liveTick 增量刷新 messages 时不会把用户拉回旧定位点
 const convEl = ref<HTMLElement | null>(null)
+let consumedSeq: number | null = null
 async function scrollToSeq(seq: number) {
   await nextTick()
   const el = convEl.value?.querySelector(`[data-seq="${seq}"]`) as HTMLElement | null
   if (!el) return
+  consumedSeq = seq
   el.scrollIntoView({ block: 'center' })
   el.classList.add('flash')
   setTimeout(() => el.classList.remove('flash'), 2400)
 }
 watch([messages, () => props.jumpSeq], () => {
-  if (props.jumpSeq != null && messages.value.length) scrollToSeq(props.jumpSeq)
+  if (props.jumpSeq != null && props.jumpSeq !== consumedSeq && messages.value.length) scrollToSeq(props.jumpSeq)
 })
+watch(() => props.sessionId, () => { consumedSeq = null })
 
 // 实时推送：当前会话有新消息入库时，只增量刷新消息流，不动头部
 watch(() => props.liveTick, async () => {
