@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { AgentType, Block, NormalizedMessage, Usage } from './model.js'
 import { scanBlocks } from './rules.js'
+import { scanSignals } from './signal-rules.js'
 
 const DB_PATH = process.env.SPECTATOR_DB ?? join(homedir(), 'data', 'spectator', 'spectator.db')
 
@@ -89,6 +90,18 @@ CREATE TABLE IF NOT EXISTS reviews (
   findings_json TEXT NOT NULL          -- [{type, detail, evidence?}]
 );
 CREATE INDEX IF NOT EXISTS idx_reviews_session ON reviews(session_id);
+
+CREATE TABLE IF NOT EXISTS signals (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL REFERENCES sessions(id),
+  message_id INTEGER NOT NULL,
+  rule       TEXT NOT NULL,
+  kind       TEXT NOT NULL,           -- correction | frustration
+  snippet    TEXT,
+  ts         TEXT,
+  UNIQUE(session_id, message_id, rule)
+);
+CREATE INDEX IF NOT EXISTS idx_signals_session ON signals(session_id);
 `)
 
 // FTS5 全文搜索：只索引 text block + tool_call 入参（thinking / tool_result 不索引）
@@ -138,6 +151,28 @@ export function backfillFts(): number {
     tx(rows)
   }
   return indexed
+}
+
+// 信号回填：全量重建（user 消息量级小，DELETE + 重扫最简单且天然幂等）
+export function backfillSignals(): number {
+  const userMsgs = db.prepare(`SELECT id, session_id, ts, blocks_json FROM messages WHERE role = 'user'`).all() as {
+    id: number; session_id: string; ts: string; blocks_json: string
+  }[]
+  let n = 0
+  const tx = db.transaction(() => {
+    db.exec('DELETE FROM signals')
+    for (const m of userMsgs) {
+      const blocks = JSON.parse(m.blocks_json) as Block[]
+      const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n')
+      if (!text.trim()) continue
+      for (const h of scanSignals(text)) {
+        insertSignal.run(m.session_id, m.id, h.rule, h.kind, h.snippet, m.ts)
+        n++
+      }
+    }
+  })
+  tx()
+  return n
 }
 
 export interface SearchOpts { agent?: string; project?: string; limit?: number; offset?: number }
@@ -246,6 +281,7 @@ export function getSessionPkByPath(path: string): string | null {
 const insertMetric = db.prepare(`INSERT INTO metrics (session_id, ts, cum_input, cum_output) VALUES (?, ?, ?, ?)`)
 const metricsStmt = db.prepare(`SELECT ts, cum_input, cum_output FROM metrics WHERE session_id = ? ORDER BY ts`)
 const insertRisk = db.prepare(`INSERT OR IGNORE INTO risks (session_id, rule, severity, snippet, ts) VALUES (?, ?, ?, ?, ?)`)
+const insertSignal = db.prepare(`INSERT OR IGNORE INTO signals (session_id, message_id, rule, kind, snippet, ts) VALUES (?, ?, ?, ?, ?, ?)`)
 
 export const insertReview = db.prepare(`
   INSERT INTO reviews (session_id, created_at, source, model, verdict, summary, findings_json)
@@ -330,6 +366,15 @@ const appendTx = db.transaction((sessionPk: string, seq: number, msg: Normalized
     })
     for (const h of riskHits) {
       insertRisk.run(sessionPk, h.rule, h.severity, h.snippet, msg.ts)
+    }
+    // 返工信号：只扫 user 消息（纠正/挫折都是用户说的）
+    if (msg.role === 'user') {
+      const text = msg.blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n')
+      if (text.trim()) {
+        for (const h of scanSignals(text)) {
+          insertSignal.run(sessionPk, Number(info.lastInsertRowid), h.rule, h.kind, h.snippet, msg.ts)
+        }
+      }
     }
   }
   return info.changes > 0

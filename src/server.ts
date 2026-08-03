@@ -40,7 +40,8 @@ app.get('/api/sessions', (c) => {
   const rows = db.prepare(`
     SELECT id, agent, parent_id, label, project_path, title, model, started_at, ended_at,
            message_count, input_tokens, output_tokens, error_count, risk_count,
-           (SELECT COUNT(*) FROM sessions s2 WHERE s2.parent_id = sessions.id) subagent_count
+           (SELECT COUNT(*) FROM sessions s2 WHERE s2.parent_id = sessions.id) subagent_count,
+           (SELECT COUNT(*) FROM signals sig WHERE sig.session_id = sessions.id AND sig.kind = 'correction') correction_count
     FROM sessions ${whereSql}
     ORDER BY started_at DESC LIMIT @limit OFFSET @offset
   `).all(params) as any[]
@@ -90,6 +91,16 @@ app.get('/api/search', (c) => {
     project: c.req.query('project'),
     limit, offset,
   }))
+})
+
+// ---- 会话的返工信号明细（前端定位用）----
+app.get('/api/sessions/:id/signals', (c) => {
+  const rows = db.prepare(`
+    SELECT sig.rule, sig.kind, sig.snippet, sig.ts, m.seq
+    FROM signals sig JOIN messages m ON m.id = sig.message_id
+    WHERE sig.session_id = ? ORDER BY sig.ts
+  `).all(c.req.param('id'))
+  return c.json(rows)
 })
 
 // ---- 单个 session 的消息流 ----
