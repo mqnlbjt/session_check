@@ -88,6 +88,48 @@ export function projectCosts(limit = 20) {
   return [...byProject.values()].sort((a, b) => b.cost - a.cost).slice(0, limit)
 }
 
+// ---- 教训聚合：信号规则频次 + 按项目分布 + 复盘 findings ----
+export function lessonsAggregate() {
+  const signalRules = db.prepare(`
+    SELECT rule, kind, COUNT(*) n FROM signals GROUP BY rule, kind ORDER BY n DESC
+  `).all()
+
+  const byProject = db.prepare(`
+    SELECT s.project_path,
+           SUM(CASE WHEN sig.kind = 'correction' THEN 1 ELSE 0 END) corrections,
+           SUM(CASE WHEN sig.kind = 'frustration' THEN 1 ELSE 0 END) frustrations
+    FROM signals sig JOIN sessions s ON s.id = sig.session_id
+    GROUP BY s.project_path ORDER BY corrections DESC
+  `).all()
+
+  // findings 在 reviews.findings_json 里（JSON 数组），JS 侧聚合
+  const reviews = db.prepare(`
+    SELECT r.session_id, r.findings_json, r.created_at, s.project_path, s.title
+    FROM reviews r LEFT JOIN sessions s ON s.id = r.session_id
+  `).all() as { session_id: string; findings_json: string; created_at: string; project_path: string | null; title: string | null }[]
+
+  const typeCount = new Map<string, number>()
+  const lessons: { type: string; detail: string; evidence?: string; session_id: string; project_path: string | null; session_title: string | null; created_at: string }[] = []
+  for (const r of reviews) {
+    let findings: { type: string; detail: string; evidence?: string }[]
+    try { findings = JSON.parse(r.findings_json) } catch { continue }
+    for (const f of findings) {
+      typeCount.set(f.type, (typeCount.get(f.type) ?? 0) + 1)
+      if (f.type === 'lesson' || f.type === 'good_practice') {
+        lessons.push({ type: f.type, detail: f.detail, evidence: f.evidence, session_id: r.session_id, project_path: r.project_path, session_title: r.title, created_at: r.created_at })
+      }
+    }
+  }
+  lessons.sort((a, b) => b.created_at.localeCompare(a.created_at))
+
+  return {
+    signalRules,
+    byProject,
+    findingTypes: [...typeCount.entries()].map(([type, n]) => ({ type, n })).sort((a, b) => b.n - a.n),
+    lessons: lessons.slice(0, 50),
+  }
+}
+
 // ---- 项目下钻：成本曲线 + git commit 曲线（并排展示，不做归属）----
 export async function projectDetail(path: string) {
   // 白名单：必须是观测过的项目路径
