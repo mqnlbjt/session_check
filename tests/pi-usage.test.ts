@@ -18,6 +18,22 @@ describe('pi parser usage 提取', () => {
     expect(r?.message?.model).toBe('moonshot/k3')
   })
 
+  it('stopReason=error 映射为 apiError，reasoning 进 usage', () => {
+    const parse = createPiParser({ filePath: '/home/x/.pi/agent/sessions/proj/2026-01-01_aaa.jsonl' })
+    parse({ type: 'session', id: 's1', cwd: '/p', timestamp: '2026-01-01T00:00:00Z' })
+    const r = parse({
+      type: 'message', id: 'm3', timestamp: '2026-01-01T00:00:03Z',
+      message: {
+        role: 'assistant', provider: 'moonshot', model: 'k3',
+        content: [], stopReason: 'error', errorMessage: 'HTTP 500',
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+      },
+    })
+    expect(r?.message?.apiError).toBe(true)
+    expect(r?.message?.blocks[0].text).toContain('[API 错误]')
+    expect(r?.message?.usage?.reasoning).toBe(0)
+  })
+
   it('user 消息无 usage 不报错', () => {
     const parse = createPiParser({ filePath: '/home/x/.pi/agent/sessions/proj/2026-01-01_aaa.jsonl' })
     parse({ type: 'session', id: 's1', cwd: '/p', timestamp: '2026-01-01T00:00:00Z' })

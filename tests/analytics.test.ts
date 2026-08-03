@@ -37,8 +37,13 @@ beforeAll(async () => {
 
   // 模型 A 会话（git 项目，有纠正信号）
   const pkA = dbmod.saveSessionMeta('pi', { sessionId: 'an-a', projectPath: gitRepo, startedAt: at(3, 14), title: 'A', model: 'claude-sonnet-4' })
-  dbmod.appendMessage(pkA, 1, { role: 'user', ts: at(3, 14), blocks: [{ type: 'text', text: '不对，重来' }] })
-  dbmod.appendMessage(pkA, 2, { role: 'assistant', ts: at(3, 14), blocks: [{ type: 'text', text: '好的' }], usage: { input: 1000, output: 500, cacheRead: 4000 } })
+  const t0 = new Date(at(3, 14)).getTime()
+  const ts = (plusSec: number) => new Date(t0 + plusSec * 1000).toISOString()
+  dbmod.appendMessage(pkA, 1, { role: 'user', ts: ts(0), blocks: [{ type: 'text', text: '不对，重来' }] })
+  // 10 秒后回复 → 延迟估算 10s；usage 带 reasoning
+  dbmod.appendMessage(pkA, 2, { role: 'assistant', ts: ts(10), blocks: [{ type: 'text', text: '好的' }], usage: { input: 1000, output: 500, cacheRead: 4000, reasoning: 120 } })
+  // API 失败消息（无 usage，不计延迟）
+  dbmod.appendMessage(pkA, 3, { role: 'assistant', ts: ts(60), blocks: [{ type: 'text', text: '[API 错误] 500' }], apiError: true })
 
   // 模型 B 会话（无 git 的项目）
   const pkB = dbmod.saveSessionMeta('codex', { sessionId: 'an-b', projectPath: '/data/nogit', startedAt: at(5, 22), title: 'B', model: 'gpt-5' })
@@ -61,11 +66,11 @@ describe('热力图', () => {
     const body = await res.json()
     expect(body.grid.length).toBe(7)
     expect(body.grid[0].length).toBe(24)
-    // 周三14点 = 2 条主会话消息（subagent 的 1 条不进）
-    expect(body.grid[3][14].messages).toBe(2)
+    // 周三14点 = 3 条主会话消息（含 API 错误消息；subagent 的 1 条不进）
+    expect(body.grid[3][14].messages).toBe(3)
     expect(body.grid[5][22].messages).toBe(1)
     const total = body.grid.flat().reduce((s: number, c: any) => s + c.messages, 0)
-    expect(total).toBe(3)
+    expect(total).toBe(4)
   })
 })
 
@@ -82,6 +87,10 @@ describe('模型对比', () => {
     // 缓存统计：4000 cache_read / (1000 净输入 + 4000) = 80% 命中率，省 4000×3×0.9/1e6
     expect(a.cache_hit_pct).toBe(80)
     expect(a.cache_saved).toBeCloseTo(0.0108, 6)
+    // 新维度：失败率 1/2（2 条 assistant 中 1 条 apiError）、reasoning tokens、延迟估算
+    expect(a.fail_rate).toBe(50)
+    expect(a.reasoning_tokens).toBe(120)
+    expect(a.avg_latency_s).toBeCloseTo(10, 1)
     expect(b.sessions).toBe(2) // an-b + an-c（codex）
     expect(b.output_tokens).toBe(2300) // 800 + 1500
     expect(b.avg_corrections).toBe(0)
