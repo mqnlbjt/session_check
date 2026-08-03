@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api, fmtTokens } from '../api'
 
 interface HeatCell { messages: number; output_tokens: number }
-interface ModelRow { model: string; sessions: number; input_tokens: number; output_tokens: number; cost: number | null; avg_tps: number | null; avg_corrections: number; cache_hit_pct: number; cache_saved: number; fail_rate: number; reasoning_tokens: number; avg_latency_s: number | null }
+interface ModelRow { model: string; sessions: number; input_tokens: number; output_tokens: number; cost: number | null; avg_tps: number | null; avg_corrections: number; cache_hit_pct: number; cache_saved: number; fail_rate: number; reasoning_tokens: number; avg_latency_s: number | null; active_hours: number; commits: number; code_lines: number }
 interface ProjectRow { project_path: string; sessions: number; messages: number; input_tokens: number; output_tokens: number; cost: number }
 interface ProjectDetail { daily: { d: string; cost: number; output_tokens: number }[]; commits: { d: string; n: number }[] }
 interface Lessons {
@@ -118,7 +118,7 @@ function fmtCost(c: number | null | undefined): string {
         <table class="tbl">
           <thead>
             <tr class="mono">
-              <th>模型</th><th>会话</th><th>成本</th><th>缓存命中</th><th>缓存节省</th><th>失败率</th><th>推理 tok</th><th>响应时长</th><th>TPS</th><th>平均纠正/会话</th><th>output</th>
+              <th>模型</th><th>会话</th><th>成本</th><th>代码行</th><th>提交</th><th>活跃时长</th><th>缓存命中</th><th>缓存节省</th><th>失败率</th><th>推理 tok</th><th>响应时长</th><th>TPS</th><th>平均纠正/会话</th><th>output</th>
             </tr>
           </thead>
           <tbody>
@@ -126,6 +126,9 @@ function fmtCost(c: number | null | undefined): string {
               <td class="mono">{{ m.model }}</td>
               <td>{{ m.sessions }}</td>
               <td class="cost">{{ fmtCost(m.cost) }}</td>
+              <td class="mono">{{ m.code_lines > 0 ? m.code_lines.toLocaleString() : '—' }}</td>
+              <td>{{ m.commits > 0 ? m.commits : '—' }}</td>
+              <td>{{ m.active_hours > 0 ? m.active_hours + 'h' : '—' }}</td>
               <td :class="{ good: m.cache_hit_pct >= 90 }">{{ m.cache_hit_pct }}%</td>
               <td class="saved">{{ m.cache_saved > 0 ? fmtCost(m.cache_saved) : '—' }}</td>
               <td :class="{ warn: m.fail_rate >= 5 }">{{ m.fail_rate }}%</td>

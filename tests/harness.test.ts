@@ -13,6 +13,8 @@ let dbmod: typeof import('../src/db.js')
 let harness: typeof import('../src/harness.js')
 let projDir = ''
 
+const daysAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString()
+
 beforeAll(async () => {
   dbmod = await import('../src/db.js')
   app = (await import('../src/server.js')).app
@@ -20,17 +22,18 @@ beforeAll(async () => {
 
   projDir = mkdtempSync(join(tmpdir(), 'spect-harness-'))
 
-  // 项目会话：高频纠正信号
-  const pk = dbmod.saveSessionMeta('pi', { sessionId: 'h-1', projectPath: projDir, startedAt: '2026-07-20T10:00:00Z', title: 'H', model: 'gpt-5.5' })
+  // 项目会话：高频纠正信号（5 天前，在 30 天建议窗口内）
+  const pk = dbmod.saveSessionMeta('pi', { sessionId: 'h-1', projectPath: projDir, startedAt: daysAgo(5), title: 'H', model: 'gpt-5.5' })
   for (let i = 0; i < 3; i++) {
-    dbmod.appendMessage(pk, i + 1, { role: 'user', ts: `2026-07-20T10:0${i}:00Z`, blocks: [{ type: 'text', text: '不对，你改错文件了' }] })
+    dbmod.appendMessage(pk, i + 1, { role: 'user', ts: daysAgo(5), blocks: [{ type: 'text', text: '不对，你改错文件了' }] })
   }
+  dbmod.appendMessage(pk, 10, { role: 'assistant', ts: daysAgo(5), blocks: [{ type: 'text', text: '好' }], usage: { input: 100, output: 50 } })
   // 让模型建议有数据：gpt-5.5 高成本 + 有纠正
   dbmod.db.prepare(`UPDATE sessions SET input_tokens = 10000000, output_tokens = 200000, avg_tps = 30 WHERE id = ?`).run(pk)
   // 便宜替代：deepseek 低纠正（5 个会话满足样本量阈值）
   for (let i = 0; i < 5; i++) {
-    const pkAlt = dbmod.saveSessionMeta('pi', { sessionId: `h-alt-${i}`, projectPath: '/data/other', startedAt: '2026-07-20T10:00:00Z', title: `Alt${i}`, model: 'deepseek-v4-pro' })
-    dbmod.appendMessage(pkAlt, 1, { role: 'assistant', ts: '2026-07-20T10:00:00Z', blocks: [{ type: 'text', text: '好' }] })
+    const pkAlt = dbmod.saveSessionMeta('pi', { sessionId: `h-alt-${i}`, projectPath: '/data/other', startedAt: daysAgo(3), title: `Alt${i}`, model: 'deepseek-v4-pro' })
+    dbmod.appendMessage(pkAlt, 1, { role: 'assistant', ts: daysAgo(3), blocks: [{ type: 'text', text: '好' }], usage: { input: 100, output: 50 } })
     dbmod.db.prepare(`UPDATE sessions SET input_tokens = 1000000, output_tokens = 20000, avg_tps = 50 WHERE id = ?`).run(pkAlt)
   }
 })
@@ -64,6 +67,35 @@ describe('建议 API', () => {
     // gpt-5.5 高成本高纠正 + deepseek 便宜低纠正 → 产生建议
     expect(body.modelAdvice.length).toBeGreaterThan(0)
     expect(body.modelAdvice[0].content).toContain('gpt-5.5')
+  })
+
+  it('模型建议带结构化证据：两个模型的完整指标对比（30 天窗口）', async () => {
+    const res = await app.request('/api/harness/suggestions')
+    const body = await res.json()
+    const ev = JSON.parse(body.modelAdvice[0].evidence)
+    expect(ev.window_days).toBe(30)
+    expect(ev.from.model).toBe('gpt-5.5')
+    expect(ev.from.cost).toBeGreaterThan(0)
+    expect(ev.from.sessions).toBe(1)
+    expect(ev.to.model).toBe('deepseek-v4-pro')
+    expect(ev.to.sessions).toBe(5)
+    expect(ev.saving_pct).toBeGreaterThan(50)
+    // 对比维度齐全
+    for (const side of [ev.from, ev.to]) {
+      expect(side).toHaveProperty('avg_corrections')
+      expect(side).toHaveProperty('fail_rate')
+      expect(side).toHaveProperty('avg_tps')
+    }
+  })
+
+  it('30 天前的会话不进模型建议', async () => {
+    // 造一个 40 天前的高成本模型会话：不应触发建议
+    const pk = dbmod.saveSessionMeta('pi', { sessionId: 'h-old', projectPath: '/data/old', startedAt: daysAgo(40), title: 'Old', model: 'gpt-5.4' })
+    dbmod.appendMessage(pk, 1, { role: 'assistant', ts: daysAgo(40), blocks: [{ type: 'text', text: '好' }], usage: { input: 100, output: 50 } })
+    dbmod.db.prepare(`UPDATE sessions SET input_tokens = 50000000, output_tokens = 1000000 WHERE id = ?`).run(pk)
+    const res = await app.request('/api/harness/suggestions')
+    const body = await res.json()
+    expect(body.modelAdvice.every((a: any) => !a.content.includes('gpt-5.4'))).toBe(true)
   })
 
   it('adopt 写入 AGENTS.md 标记块', async () => {

@@ -98,7 +98,7 @@ app.get('/api/search', (c) => {
 
 // ---- 分析聚合：热力图 / 模型对比 / 项目成本榜 / 项目下钻 ----
 app.get('/api/analytics/heatmap', (c) => c.json(heatmap()))
-app.get('/api/analytics/models', (c) => c.json(modelCompare()))
+app.get('/api/analytics/models', async (c) => c.json(await modelCompare(Number(c.req.query('window') ?? 90))))
 app.get('/api/analytics/projects', (c) => c.json(projectCosts()))
 app.get('/api/lessons', (c) => c.json(lessonsAggregate()))
 
@@ -106,7 +106,7 @@ app.get('/api/lessons', (c) => c.json(lessonsAggregate()))
 // 生成是异步的（LLM 调用 1-3 分钟）：POST 立即返回，前端轮询 GET 等新建议
 const generating = new Set<string>()
 
-app.get('/api/harness/suggestions', (c) => c.json(listSuggestions()))
+app.get('/api/harness/suggestions', async (c) => c.json(await listSuggestions()))
 
 app.post('/api/harness/generate', async (c) => {
   const { project_path } = await c.req.json().catch(() => ({ project_path: null }))

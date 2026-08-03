@@ -12,6 +12,28 @@ interface Suggestion {
   adopted_to: string | null
 }
 interface ModelAdvice { content: string; evidence: string }
+interface AdviceMetrics {
+  model: string; sessions: number; cost: number; avg_corrections: number
+  fail_rate: number; avg_latency_s: number | null; avg_tps: number | null
+  cache_hit_pct: number; active_hours: number; commits: number; code_lines: number
+}
+interface AdviceEvidence { window_days: number; from: AdviceMetrics; to: AdviceMetrics; saving_pct: number }
+
+function parseEvidence(e: string): AdviceEvidence | null {
+  try { const d = JSON.parse(e); return d.from && d.to ? d : null } catch { return null }
+}
+
+const METRIC_ROWS: { key: keyof AdviceMetrics; label: string; fmt: (v: any) => string; betterLow?: boolean }[] = [
+  { key: 'cost', label: '成本', fmt: (v) => `$${Number(v).toFixed(1)}`, betterLow: true },
+  { key: 'sessions', label: '会话数', fmt: String },
+  { key: 'code_lines', label: '代码行', fmt: (v) => v > 0 ? Number(v).toLocaleString() : '—' },
+  { key: 'active_hours', label: '活跃时长', fmt: (v) => v > 0 ? `${v}h` : '—' },
+  { key: 'avg_corrections', label: '纠正/会话', fmt: String, betterLow: true },
+  { key: 'fail_rate', label: '失败率', fmt: (v) => `${v}%`, betterLow: true },
+  { key: 'avg_latency_s', label: '响应时长', fmt: (v) => v != null ? `${v}s` : '—', betterLow: true },
+  { key: 'avg_tps', label: 'TPS', fmt: (v) => v ?? '—' },
+  { key: 'cache_hit_pct', label: '缓存命中', fmt: (v) => `${v}%` },
+]
 interface Candidate { project_path: string; corrections: number }
 
 const suggestions = ref<Suggestion[]>([])
@@ -116,11 +138,33 @@ function shortPath(p: string) {
 
       <!-- 模型建议 -->
       <section class="card">
-        <h3 class="c-title mono">模型选择建议 · 近 90 天数据</h3>
+        <h3 class="c-title mono">模型选择建议 · 近 30 天数据</h3>
         <div v-if="!modelAdvice.length" class="hint">当前模型组合没有明显的优化空间</div>
-        <div v-for="(a, i) in modelAdvice" :key="i" class="advice">
-          <span class="bulb">💡</span>
-          <span class="advice-text">{{ a.content }}</span>
+        <div v-for="(a, i) in modelAdvice" :key="i" class="advice-block">
+          <div class="advice">
+            <span class="bulb">💡</span>
+            <span class="advice-text">{{ a.content }}</span>
+          </div>
+          <table v-if="parseEvidence(a.evidence)" class="cmp">
+            <thead>
+              <tr class="mono">
+                <th></th>
+                <th>{{ parseEvidence(a.evidence)!.from.model }}</th>
+                <th class="to">{{ parseEvidence(a.evidence)!.to.model }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in METRIC_ROWS" :key="row.key">
+                <td class="cmp-label">{{ row.label }}</td>
+                <td :class="{ worse: row.betterLow && parseEvidence(a.evidence)!.from[row.key] > parseEvidence(a.evidence)!.to[row.key] }">
+                  {{ row.fmt(parseEvidence(a.evidence)!.from[row.key]) }}
+                </td>
+                <td class="to" :class="{ better: row.betterLow && parseEvidence(a.evidence)!.to[row.key] < parseEvidence(a.evidence)!.from[row.key] }">
+                  {{ row.fmt(parseEvidence(a.evidence)!.to[row.key]) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
@@ -194,8 +238,20 @@ function shortPath(p: string) {
 .toggle { background: none; border: none; cursor: pointer; padding: 0; }
 .toggle:hover { color: var(--amber); }
 
-.advice { display: flex; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
-.advice:last-child { border-bottom: none; }
+.advice { display: flex; gap: 10px; padding: 10px 4px 6px; font-size: 13px; }
+.advice-block { border-bottom: 1px solid var(--line); padding-bottom: 10px; margin-bottom: 4px; }
+.advice-block:last-child { border-bottom: none; }
+
+/* 建议对比表 */
+.cmp { width: 100%; border-collapse: collapse; font-size: 11px; margin: 4px 0 6px 26px; max-width: 560px; }
+.cmp th { text-align: left; font-size: 10px; color: var(--faint); font-weight: 500; padding: 3px 10px 5px 0; border-bottom: 1px solid var(--line); }
+.cmp th.to { color: var(--codex); }
+.cmp td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); color: var(--text); }
+.cmp tr:last-child td { border-bottom: none; }
+.cmp-label { color: var(--dim) !important; }
+.cmp td.to { color: var(--codex); }
+.cmp td.better { font-weight: 600; }
+.cmp td.worse { color: var(--danger); }
 .bulb { flex-shrink: 0; }
 .advice-text { color: var(--text); line-height: 1.6; }
 

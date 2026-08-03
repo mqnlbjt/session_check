@@ -34,6 +34,12 @@ beforeAll(async () => {
   git(['config', 'user.name', 't'])
   git(['commit', '-q', '--allow-empty', '-m', 'c1'], { GIT_AUTHOR_DATE: at(1, 10), GIT_COMMITTER_DATE: at(1, 10) })
   git(['commit', '-q', '--allow-empty', '-m', 'c2'], { GIT_AUTHOR_DATE: at(1, 10), GIT_COMMITTER_DATE: at(1, 10) })
+  // c3：带 3 行真实变更，时间落在 an-a 会话窗口内（周三 14:00 +5min）
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(join(gitRepo, 'src.ts'), 'line1\nline2\nline3\n')
+  git(['add', '.'])
+  const c3time = new Date(new Date(at(3, 14)).getTime() + 5 * 60000).toISOString()
+  git(['commit', '-q', '-m', 'c3'], { GIT_AUTHOR_DATE: c3time, GIT_COMMITTER_DATE: c3time })
 
   // 模型 A 会话（git 项目，有纠正信号）
   const pkA = dbmod.saveSessionMeta('pi', { sessionId: 'an-a', projectPath: gitRepo, startedAt: at(3, 14), title: 'A', model: 'claude-sonnet-4' })
@@ -91,6 +97,10 @@ describe('模型对比', () => {
     expect(a.fail_rate).toBe(50)
     expect(a.reasoning_tokens).toBe(120)
     expect(a.avg_latency_s).toBeCloseTo(10, 1)
+    // 产出：c3（3 行变更）落在 an-a/an-c 窗口内，时间窗归属给其中一个模型
+    expect(a.commits + b.commits).toBe(1)
+    expect(a.code_lines + b.code_lines).toBe(3)
+    expect(a.active_hours).toBe(0) // 60s 活跃 → 0.0h
     expect(b.sessions).toBe(2) // an-b + an-c（codex）
     expect(b.output_tokens).toBe(2300) // 800 + 1500
     expect(b.avg_corrections).toBe(0)
@@ -117,7 +127,7 @@ describe('项目下钻（成本 vs commit）', () => {
     const body = await res.json()
     expect(body.daily.length).toBeGreaterThan(0)
     const totalCommits = body.commits.reduce((s: number, c: any) => s + c.n, 0)
-    expect(totalCommits).toBe(2)
+    expect(totalCommits).toBe(3)
   })
 
   it('codex 项目的 metrics 差分也进成本曲线', async () => {
