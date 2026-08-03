@@ -10,7 +10,7 @@ import { db, getSessionPkByPath, insertReview, searchMessages } from './db.js'
 import { costOf } from './pricing.js'
 import { startReview, reviewStatus, type EngineResult } from './review.js'
 import { renderMarkdown } from './export.js'
-import { heatmap, modelCompare, projectCosts, projectDetail } from './analytics.js'
+import { heatmap, modelCompare, projectCosts, projectDetail, lessonsAggregate } from './analytics.js'
 import { extractLessons, persistToInstructions, persistToSkill, type PersistMode } from './persist.js'
 
 // 复盘沉淀结果（sessionPk → 写入的文件路径），供 review-status 查询
@@ -99,6 +99,7 @@ app.get('/api/search', (c) => {
 app.get('/api/analytics/heatmap', (c) => c.json(heatmap()))
 app.get('/api/analytics/models', (c) => c.json(modelCompare()))
 app.get('/api/analytics/projects', (c) => c.json(projectCosts()))
+app.get('/api/lessons', (c) => c.json(lessonsAggregate()))
 app.get('/api/analytics/project', async (c) => {
   const path = c.req.query('path')
   if (!path) return c.json({ error: 'path 必填' }, 400)

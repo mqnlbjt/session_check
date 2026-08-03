@@ -6,10 +6,17 @@ interface HeatCell { messages: number; output_tokens: number }
 interface ModelRow { model: string; sessions: number; input_tokens: number; output_tokens: number; cost: number | null; avg_tps: number | null; avg_corrections: number }
 interface ProjectRow { project_path: string; sessions: number; messages: number; input_tokens: number; output_tokens: number; cost: number }
 interface ProjectDetail { daily: { d: string; cost: number; output_tokens: number }[]; commits: { d: string; n: number }[] }
+interface Lessons {
+  signalRules: { rule: string; kind: string; n: number }[]
+  byProject: { project_path: string; corrections: number; frustrations: number }[]
+  findingTypes: { type: string; n: number }[]
+  lessons: { type: string; detail: string; evidence?: string; session_id: string; project_path: string | null; session_title: string | null; created_at: string }[]
+}
 
 const grid = ref<HeatCell[][]>([])
 const models = ref<ModelRow[]>([])
 const projects = ref<ProjectRow[]>([])
+const lessons = ref<Lessons | null>(null)
 const loading = ref(true)
 const expanded = ref<string | null>(null)
 const detail = ref<ProjectDetail | null>(null)
@@ -19,14 +26,16 @@ const DOW_LABEL = ['日', '一', '二', '三', '四', '五', '六']
 
 onMounted(async () => {
   try {
-    const [h, m, p] = await Promise.all([
+    const [h, m, p, l] = await Promise.all([
       fetch('/api/analytics/heatmap').then((r) => r.json()),
       fetch('/api/analytics/models').then((r) => r.json()),
       fetch('/api/analytics/projects').then((r) => r.json()),
+      fetch('/api/lessons').then((r) => r.json()),
     ])
     grid.value = h.grid
     models.value = m
     projects.value = p
+    lessons.value = l
   } finally {
     loading.value = false
   }
@@ -59,6 +68,16 @@ function bars(series: { d: string; v: number }[]) {
     x: i * bw + 0.5, y: CHART_H - Math.max(1, (x.v / max) * (CHART_H - 12)),
     w: Math.max(1, bw - 1), h: Math.max(1, (x.v / max) * (CHART_H - 12)), ...x,
   }))
+}
+
+const FINDING_LABEL: Record<string, string> = {
+  rework: '返工', correction: '纠正', misunderstanding: '理解偏差',
+  good_practice: '亮点', lesson: '经验', risk: '风险',
+}
+const RULE_LABEL: Record<string, string> = {
+  wrong: '不对/错了', redo: '重来/重新', 'not-what-i-said': '我不是说',
+  'stop-change': '别改/回退', 'why-did-you': '你为什么', again: '怎么又',
+  'still-broken': '还是不行', 'give-up': '算了',
 }
 
 function shortPath(p: string) {
@@ -151,6 +170,39 @@ function fmtCost(c: number | null | undefined): string {
           </div>
         </div>
       </section>
+      <!-- 教训聚合 -->
+      <section v-if="lessons" class="card">
+        <h3 class="c-title mono">教训聚合 · 返工信号 + 复盘经验</h3>
+        <div class="lessons-grid">
+          <div>
+            <h4 class="sub-title mono">信号规则频次</h4>
+            <div v-for="r in lessons.signalRules.slice(0, 8)" :key="r.rule" class="rule-row">
+              <span class="rule-name">{{ RULE_LABEL[r.rule] ?? r.rule }}</span>
+              <div class="rule-bar-wrap">
+                <div class="rule-bar" :class="r.kind" :style="{ width: `${(r.n / lessons.signalRules[0].n) * 100}%` }"></div>
+              </div>
+              <span class="rule-n mono">{{ r.n }}</span>
+            </div>
+          </div>
+          <div>
+            <h4 class="sub-title mono">项目纠正分布</h4>
+            <div v-for="p in lessons.byProject.slice(0, 8)" :key="p.project_path" class="proj-sig">
+              <span class="ps-path mono" :title="p.project_path">{{ shortPath(p.project_path ?? '') }}</span>
+              <span class="ps-n correction">↺ {{ p.corrections }}</span>
+              <span v-if="p.frustrations" class="ps-n frustration">〜 {{ p.frustrations }}</span>
+            </div>
+          </div>
+        </div>
+        <template v-if="lessons.lessons.length">
+          <h4 class="sub-title mono">复盘沉淀的经验</h4>
+          <div v-for="(l, i) in lessons.lessons" :key="i" class="lesson-item">
+            <span class="lesson-type mono" :class="l.type">{{ FINDING_LABEL[l.type] ?? l.type }}</span>
+            <span class="lesson-detail">{{ l.detail }}</span>
+            <span class="lesson-src mono" :title="l.session_title ?? ''">{{ shortPath(l.project_path ?? '') }}</span>
+          </div>
+        </template>
+        <div v-else class="hint">还没有复盘数据——在会话页点「复盘」积累经验</div>
+      </section>
     </template>
   </div>
 </template>
@@ -215,4 +267,28 @@ function fmtCost(c: number | null | undefined): string {
 .bar.amber { fill: var(--amber); }
 .bar.green { fill: var(--codex); }
 .nogit { font-size: 11px; color: var(--faint); }
+
+/* 教训聚合 */
+.lessons-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 14px; }
+.sub-title { font-size: 10px; color: var(--faint); letter-spacing: 0.08em; margin: 8px 0 10px; font-weight: 500; }
+.rule-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11px; }
+.rule-name { width: 76px; flex-shrink: 0; color: var(--dim); }
+.rule-bar-wrap { flex: 1; height: 10px; background: var(--ink); border-radius: 3px; overflow: hidden; }
+.rule-bar { height: 100%; border-radius: 3px; }
+.rule-bar.correction { background: var(--amber); }
+.rule-bar.frustration { background: var(--faint); }
+.rule-n { width: 28px; text-align: right; color: var(--dim); font-size: 10px; }
+.proj-sig { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 11px; border-bottom: 1px solid var(--line); }
+.proj-sig:last-child { border-bottom: none; }
+.ps-path { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-n.correction { color: var(--amber); }
+.ps-n.frustration { color: var(--faint); }
+.lesson-item { display: flex; align-items: baseline; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.lesson-item:last-child { border-bottom: none; }
+.lesson-type { flex-shrink: 0; font-size: 10px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--line); color: var(--dim); }
+.lesson-type.lesson { color: var(--codex); border-color: rgba(91, 157, 214, 0.4); }
+.lesson-type.good_practice { color: var(--amber); border-color: rgba(232, 163, 61, 0.4); }
+.lesson-detail { flex: 1; color: var(--text); }
+.lesson-src { color: var(--faint); font-size: 10px; }
+@media (max-width: 900px) { .lessons-grid { grid-template-columns: 1fr; } }
 </style>
