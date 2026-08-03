@@ -79,6 +79,8 @@ export function createPiParser(ctx: ParserContext) {
     }
     if (blocks.length === 0) return null
 
+    // pi assistant 消息自带完整 usage：input 是净输入（不含 cache），cacheWrite 即 cache 创建
+    const u = (msg as any).usage
     return {
       message: {
         eventId: line.id,
@@ -86,6 +88,13 @@ export function createPiParser(ctx: ParserContext) {
         role: msg.role === 'assistant' ? 'assistant' : 'user',
         ts,
         blocks,
+        model: (msg as any).provider && (msg as any).model ? `${(msg as any).provider}/${(msg as any).model}` : undefined,
+        usage: u ? {
+          input: u.input ?? 0,
+          output: u.output ?? 0,
+          cacheRead: u.cacheRead ?? 0,
+          cacheCreation: u.cacheWrite ?? 0,
+        } : undefined,
       },
     }
   }
