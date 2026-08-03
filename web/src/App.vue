@@ -6,8 +6,9 @@ import ConversationView from './components/ConversationView.vue'
 import OverviewView from './components/OverviewView.vue'
 import SearchView from './components/SearchView.vue'
 import AnalyticsView from './components/AnalyticsView.vue'
+import HarnessView from './components/HarnessView.vue'
 
-const view = ref<'overview' | 'sessions' | 'search' | 'analytics'>('overview')
+const view = ref<'overview' | 'sessions' | 'search' | 'analytics' | 'harness'>('overview')
 const overviewRef = ref<InstanceType<typeof OverviewView> | null>(null)
 
 const sessions = ref<SessionRow[]>([])
@@ -140,6 +141,7 @@ function agentStat(agent: string) {
           <button class="nav-btn mono" :class="{ on: view === 'sessions' }" @click="view = 'sessions'">会话</button>
           <button class="nav-btn mono" :class="{ on: view === 'search' }" @click="view = 'search'">搜索</button>
           <button class="nav-btn mono" :class="{ on: view === 'analytics' }" @click="view = 'analytics'">分析</button>
+          <button class="nav-btn mono" :class="{ on: view === 'harness' }" @click="view = 'harness'">Harness</button>
         </nav>
       </div>
       <div class="topstats mono" v-if="stats">
@@ -193,6 +195,7 @@ function agentStat(agent: string) {
       <OverviewView v-if="view === 'overview'" ref="overviewRef" />
       <SearchView v-else-if="view === 'search'" @jump="onJump" />
       <AnalyticsView v-else-if="view === 'analytics'" />
+      <HarnessView v-else-if="view === 'harness'" />
       <template v-else>
         <ConversationView v-if="selected" :session-id="selected" :live-tick="liveTick" :jump-seq="jumpSeq" @select="onSelect" />
         <div v-else class="empty">

@@ -48,7 +48,7 @@ export function modelCompare() {
     (db.prepare(`
       SELECT s.model, COUNT(*) n FROM signals sig
       JOIN sessions s ON s.id = sig.session_id
-      WHERE sig.kind = 'correction' AND s.${MAIN_ONLY}
+      WHERE sig.kind = 'correction' AND s.${MAIN_ONLY} AND sig.ts >= ${WINDOW}
       GROUP BY s.model
     `).all() as { model: string; n: number }[]).map((r) => [r.model, r.n])
   )

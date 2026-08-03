@@ -11,6 +11,7 @@ import { costOf } from './pricing.js'
 import { startReview, reviewStatus, type EngineResult } from './review.js'
 import { renderMarkdown } from './export.js'
 import { heatmap, modelCompare, projectCosts, projectDetail, lessonsAggregate } from './analytics.js'
+import { generateGuardRules, listSuggestions, adoptSuggestion, dismissSuggestion } from './harness.js'
 import { extractLessons, persistToInstructions, persistToSkill, type PersistMode } from './persist.js'
 
 // 复盘沉淀结果（sessionPk → 写入的文件路径），供 review-status 查询
@@ -100,6 +101,38 @@ app.get('/api/analytics/heatmap', (c) => c.json(heatmap()))
 app.get('/api/analytics/models', (c) => c.json(modelCompare()))
 app.get('/api/analytics/projects', (c) => c.json(projectCosts()))
 app.get('/api/lessons', (c) => c.json(lessonsAggregate()))
+
+// ---- Harness 建议（期5）----
+// 生成是异步的（LLM 调用 1-3 分钟）：POST 立即返回，前端轮询 GET 等新建议
+const generating = new Set<string>()
+
+app.get('/api/harness/suggestions', (c) => c.json(listSuggestions()))
+
+app.post('/api/harness/generate', async (c) => {
+  const { project_path } = await c.req.json().catch(() => ({ project_path: null }))
+  if (!project_path) return c.json({ error: 'project_path 必填' }, 400)
+  if (generating.has(project_path)) return c.json({ error: '该项目正在生成中' }, 409)
+  generating.add(project_path)
+  generateGuardRules(project_path)
+    .catch((e) => console.error('[harness] 生成失败:', e))
+    .finally(() => generating.delete(project_path))
+  return c.json({ status: 'started', project_path })
+})
+
+app.post('/api/harness/suggestions/:id/adopt', (c) => {
+  try {
+    const r = adoptSuggestion(Number(c.req.param('id')))
+    if (!r) return c.json({ error: '建议不存在或已处理' }, 404)
+    return c.json(r)
+  } catch (e: any) {
+    return c.json({ error: `写入失败：${e?.message ?? '未知错误'}` }, 500)
+  }
+})
+
+app.post('/api/harness/suggestions/:id/dismiss', (c) => {
+  if (!dismissSuggestion(Number(c.req.param('id')))) return c.json({ error: '建议不存在或已处理' }, 404)
+  return c.json({ ok: true })
+})
 app.get('/api/analytics/project', async (c) => {
   const path = c.req.query('path')
   if (!path) return c.json({ error: 'path 必填' }, 400)

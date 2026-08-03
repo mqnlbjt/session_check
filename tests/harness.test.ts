@@ -1,0 +1,91 @@
+// Harness 建议引擎测试：LLM 生成（注入假实现）+ 采纳/忽略 + 模型建议
+import { beforeAll, describe, expect, it } from 'vitest'
+import { mkdtempSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { Hono } from 'hono'
+
+process.env.SPECTATOR_DB = ':memory:'
+
+let app: Hono
+let dbmod: typeof import('../src/db.js')
+let harness: typeof import('../src/harness.js')
+let projDir = ''
+
+beforeAll(async () => {
+  dbmod = await import('../src/db.js')
+  app = (await import('../src/server.js')).app
+  harness = await import('../src/harness.js')
+
+  projDir = mkdtempSync(join(tmpdir(), 'spect-harness-'))
+
+  // 项目会话：高频纠正信号
+  const pk = dbmod.saveSessionMeta('pi', { sessionId: 'h-1', projectPath: projDir, startedAt: '2026-07-20T10:00:00Z', title: 'H', model: 'gpt-5.5' })
+  for (let i = 0; i < 3; i++) {
+    dbmod.appendMessage(pk, i + 1, { role: 'user', ts: `2026-07-20T10:0${i}:00Z`, blocks: [{ type: 'text', text: '不对，你改错文件了' }] })
+  }
+  // 让模型建议有数据：gpt-5.5 高成本 + 有纠正
+  dbmod.db.prepare(`UPDATE sessions SET input_tokens = 10000000, output_tokens = 200000, avg_tps = 30 WHERE id = ?`).run(pk)
+  // 便宜替代：deepseek 低纠正（5 个会话满足样本量阈值）
+  for (let i = 0; i < 5; i++) {
+    const pkAlt = dbmod.saveSessionMeta('pi', { sessionId: `h-alt-${i}`, projectPath: '/data/other', startedAt: '2026-07-20T10:00:00Z', title: `Alt${i}`, model: 'deepseek-v4-pro' })
+    dbmod.appendMessage(pkAlt, 1, { role: 'assistant', ts: '2026-07-20T10:00:00Z', blocks: [{ type: 'text', text: '好' }] })
+    dbmod.db.prepare(`UPDATE sessions SET input_tokens = 1000000, output_tokens = 20000, avg_tps = 50 WHERE id = ?`).run(pkAlt)
+  }
+})
+
+describe('防呆规则生成（LLM 注入）', () => {
+  it('假 LLM 返回 JSON 数组 → 规则落 suggestions', async () => {
+    const fakeLlm = async () => '分析完毕：["动手前先复述用户需求再改代码", "修改前确认目标文件路径"]'
+    const rules = await harness.generateGuardRules(projDir, fakeLlm)
+    expect(rules.length).toBe(2)
+    const rows = dbmod.db.prepare(`SELECT * FROM suggestions WHERE project_path = ? AND kind = 'guard_rule'`).all(projDir) as any[]
+    expect(rows.length).toBe(2)
+    expect(rows[0].status).toBe('pending')
+    expect(rows[0].evidence).toContain('wrong')
+  })
+
+  it('LLM 返回非 JSON → 不落库不炸', async () => {
+    const badLlm = async () => '我觉得这个项目需要注意很多问题，但我说不清楚'
+    const rules = await harness.generateGuardRules(projDir, badLlm)
+    expect(rules).toEqual([])
+    const n = dbmod.db.prepare(`SELECT COUNT(*) n FROM suggestions WHERE project_path = ?`).get(projDir) as any
+    expect(n.n).toBe(2) // 还是之前的 2 条
+  })
+})
+
+describe('建议 API', () => {
+  it('GET 返回 pending 优先 + 模型建议', async () => {
+    const res = await app.request('/api/harness/suggestions')
+    const body = await res.json()
+    expect(body.suggestions.length).toBe(2)
+    expect(body.suggestions[0].status).toBe('pending')
+    // gpt-5.5 高成本高纠正 + deepseek 便宜低纠正 → 产生建议
+    expect(body.modelAdvice.length).toBeGreaterThan(0)
+    expect(body.modelAdvice[0].content).toContain('gpt-5.5')
+  })
+
+  it('adopt 写入 AGENTS.md 标记块', async () => {
+    const row = dbmod.db.prepare(`SELECT id FROM suggestions LIMIT 1`).get() as any
+    const res = await app.request(`/api/harness/suggestions/${row.id}/adopt`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.adopted_to).toContain('AGENTS.md')
+    const content = readFileSync(join(projDir, 'AGENTS.md'), 'utf8')
+    expect(content).toContain('动手前先复述用户需求再改代码')
+    const after = dbmod.db.prepare(`SELECT status FROM suggestions WHERE id = ?`).get(row.id) as any
+    expect(after.status).toBe('adopted')
+  })
+
+  it('dismiss 后不再出现在 pending', async () => {
+    const row = dbmod.db.prepare(`SELECT id FROM suggestions WHERE status = 'pending' LIMIT 1`).get() as any
+    await app.request(`/api/harness/suggestions/${row.id}/dismiss`, { method: 'POST' })
+    const res = await app.request('/api/harness/suggestions')
+    const body = await res.json()
+    // dismissed 仍在列表（前端折叠展示），但状态已变
+    const dismissed = body.suggestions.find((s: any) => s.id === row.id)
+    expect(dismissed.status).toBe('dismissed')
+    expect(body.suggestions.filter((s: any) => s.status === 'pending').every((s: any) => s.id !== row.id)).toBe(true)
+  })
+})
