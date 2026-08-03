@@ -77,10 +77,16 @@ export function createPiParser(ctx: ParserContext) {
         blocks.push({ type: 'tool_call', name: c.name, input: c.arguments, toolCallId: c.id })
       }
     }
-    if (blocks.length === 0) return null
+    if (blocks.length === 0 && (msg as any).stopReason !== 'error') return null
 
     // pi assistant 消息自带完整 usage：input 是净输入（不含 cache），cacheWrite 即 cache 创建
+    // stopReason=error 是 API 调用失败（content 为空、usage 为零），也要入库用于失败率统计
     const u = (msg as any).usage
+    const apiError = (msg as any).stopReason === 'error'
+    if (apiError && blocks.length === 0) {
+      const errText = (msg as any).errorMessage ?? (msg as any).error ?? ''
+      blocks.push({ type: 'text', text: `[API 错误] ${String(errText).slice(0, 200)}`.trimEnd() })
+    }
     return {
       message: {
         eventId: line.id,
@@ -94,7 +100,9 @@ export function createPiParser(ctx: ParserContext) {
           output: u.output ?? 0,
           cacheRead: u.cacheRead ?? 0,
           cacheCreation: u.cacheWrite ?? 0,
+          reasoning: u.reasoning ?? undefined,
         } : undefined,
+        apiError: apiError || undefined,
       },
     }
   }

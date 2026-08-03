@@ -90,6 +90,8 @@ export function createClaudeParser(ctx: ParserContext) {
           cacheRead: u.cache_read_input_tokens,
           cacheCreation: u.cache_creation_input_tokens,
         } : undefined,
+        // claude 的 API 失败标记在顶层（isApiErrorMessage + apiErrorStatus）
+        apiError: line.isApiErrorMessage ? true : undefined,
       },
     }
   }

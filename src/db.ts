@@ -66,6 +66,7 @@ try { db.exec(`ALTER TABLE sessions ADD COLUMN error_count INTEGER NOT NULL DEFA
 try { db.exec(`ALTER TABLE sessions ADD COLUMN risk_count INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
 try { db.exec(`ALTER TABLE sessions ADD COLUMN cache_read INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
 try { db.exec(`ALTER TABLE sessions ADD COLUMN cache_creation INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
+try { db.exec(`ALTER TABLE messages ADD COLUMN api_error INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS risks (
@@ -255,8 +256,8 @@ ON CONFLICT(id) DO UPDATE SET
 `)
 
 const insertMessage = db.prepare(`
-INSERT OR IGNORE INTO messages (session_id, seq, event_id, role, ts, blocks_json, model, usage_json)
-VALUES (@session_id, @seq, @event_id, @role, @ts, @blocks_json, @model, @usage_json)
+INSERT OR IGNORE INTO messages (session_id, seq, event_id, role, ts, blocks_json, model, usage_json, api_error)
+VALUES (@session_id, @seq, @event_id, @role, @ts, @blocks_json, @model, @usage_json, @api_error)
 `)
 
 const bumpSession = db.prepare(`
@@ -366,6 +367,7 @@ const appendTx = db.transaction((sessionPk: string, seq: number, msg: Normalized
     blocks_json: JSON.stringify(msg.blocks),
     model: msg.model ?? null,
     usage_json: msg.usage ? JSON.stringify(msg.usage) : null,
+    api_error: msg.apiError ? 1 : 0,
   })
   if (info.changes > 0) {
     const text = searchableText(msg.blocks)

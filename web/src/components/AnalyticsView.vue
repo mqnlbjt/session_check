@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api, fmtTokens } from '../api'
 
 interface HeatCell { messages: number; output_tokens: number }
-interface ModelRow { model: string; sessions: number; input_tokens: number; output_tokens: number; cost: number | null; avg_tps: number | null; avg_corrections: number; cache_hit_pct: number; cache_saved: number }
+interface ModelRow { model: string; sessions: number; input_tokens: number; output_tokens: number; cost: number | null; avg_tps: number | null; avg_corrections: number; cache_hit_pct: number; cache_saved: number; fail_rate: number; reasoning_tokens: number; avg_latency_s: number | null }
 interface ProjectRow { project_path: string; sessions: number; messages: number; input_tokens: number; output_tokens: number; cost: number }
 interface ProjectDetail { daily: { d: string; cost: number; output_tokens: number }[]; commits: { d: string; n: number }[] }
 interface Lessons {
@@ -118,7 +118,7 @@ function fmtCost(c: number | null | undefined): string {
         <table class="tbl">
           <thead>
             <tr class="mono">
-              <th>模型</th><th>会话</th><th>成本</th><th>缓存命中</th><th>缓存节省</th><th>TPS</th><th>平均纠正/会话</th><th>output</th>
+              <th>模型</th><th>会话</th><th>成本</th><th>缓存命中</th><th>缓存节省</th><th>失败率</th><th>推理 tok</th><th>响应时长</th><th>TPS</th><th>平均纠正/会话</th><th>output</th>
             </tr>
           </thead>
           <tbody>
@@ -128,6 +128,9 @@ function fmtCost(c: number | null | undefined): string {
               <td class="cost">{{ fmtCost(m.cost) }}</td>
               <td :class="{ good: m.cache_hit_pct >= 90 }">{{ m.cache_hit_pct }}%</td>
               <td class="saved">{{ m.cache_saved > 0 ? fmtCost(m.cache_saved) : '—' }}</td>
+              <td :class="{ warn: m.fail_rate >= 5 }">{{ m.fail_rate }}%</td>
+              <td class="mono">{{ m.reasoning_tokens > 0 ? fmtTokens(m.reasoning_tokens) : '—' }}</td>
+              <td>{{ m.avg_latency_s != null ? m.avg_latency_s + 's' : '—' }}</td>
               <td>{{ m.avg_tps ?? '—' }}</td>
               <td :class="{ warn: m.avg_corrections >= 1 }">{{ m.avg_corrections }}</td>
               <td class="mono">{{ fmtTokens(m.output_tokens) }}</td>

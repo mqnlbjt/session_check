@@ -21,6 +21,7 @@ export interface Usage {
   output?: number
   cacheRead?: number
   cacheCreation?: number
+  reasoning?: number
 }
 
 export interface NormalizedMessage {
@@ -31,6 +32,8 @@ export interface NormalizedMessage {
   blocks: Block[]
   model?: string
   usage?: Usage
+  // API 调用失败（pi stopReason=error / claude isApiErrorMessage）
+  apiError?: boolean
 }
 
 // parser 处理单行后的产出

@@ -79,6 +79,48 @@ export function modelCompare() {
     merged.set(key, m)
   }
 
+  // ---- 请求级维度（消息口径：每条 assistant 消息 ≈ 一次 API 调用）----
+  // 失败率：api_error 标记（pi stopReason=error / claude isApiErrorMessage）
+  const failRows = db.prepare(`
+    SELECT COALESCE(m.model, s.model) model, COUNT(*) total, SUM(m.api_error) fails
+    FROM messages m JOIN sessions s ON s.id = m.session_id
+    WHERE m.role = 'assistant' AND s.${MAIN_ONLY} AND m.ts >= ${WINDOW}
+      AND COALESCE(m.model, s.model) IS NOT NULL
+    GROUP BY 1
+  `).all() as { model: string; total: number; fails: number }[]
+  const failByModel = new Map(failRows.map((r) => [bareModel(r.model), r]))
+
+  // reasoning tokens：pi usage 里单独上报
+  const reasonRows = db.prepare(`
+    SELECT COALESCE(m.model, s.model) model, SUM(json_extract(m.usage_json, '$.reasoning')) reasoning
+    FROM messages m JOIN sessions s ON s.id = m.session_id
+    WHERE m.role = 'assistant' AND s.${MAIN_ONLY} AND m.ts >= ${WINDOW} AND m.usage_json IS NOT NULL
+    GROUP BY 1
+  `).all() as { model: string; reasoning: number | null }[]
+  const reasonByModel = new Map(reasonRows.map((r) => [bareModel(r.model), r.reasoning ?? 0]))
+
+  // 响应延迟估算：assistant 消息与前一条消息的时间差（只算紧跟 user/tool 的，排除用户思考间隔；
+  // 0.5s<gap<300s 过滤异常值），带 usage 的消息才是真实 API 调用
+  // 响应延迟估算：LAG 必须先在全量消息上算，再过滤 assistant 行
+  // （WHERE 先于窗口函数执行，先过滤会让 LAG 只看见 assistant，prev_role 永远拿不到 user/tool）
+  const latencyRows = db.prepare(`
+    WITH all_msgs AS (
+      SELECT m.role, COALESCE(m.model, s.model) model, m.usage_json, m.ts,
+             LAG(m.ts) OVER w prev_ts,
+             LAG(m.role) OVER w prev_role
+      FROM messages m JOIN sessions s ON s.id = m.session_id
+      WHERE s.${MAIN_ONLY} AND m.ts >= ${WINDOW}
+      WINDOW w AS (PARTITION BY m.session_id ORDER BY m.seq)
+    )
+    SELECT model, AVG((julianday(ts) - julianday(prev_ts)) * 86400) avg_s
+    FROM all_msgs
+    WHERE role = 'assistant' AND usage_json IS NOT NULL
+      AND prev_role IN ('user', 'tool')
+      AND (julianday(ts) - julianday(prev_ts)) * 86400 BETWEEN 0.5 AND 300
+    GROUP BY model
+  `).all() as { model: string; avg_s: number }[]
+  const latencyByModel = new Map(latencyRows.map((r) => [bareModel(r.model), r.avg_s]))
+
   return [...merged.values()].map((m) => ({
     model: m.model,
     sessions: m.sessions,
@@ -91,6 +133,9 @@ export function modelCompare() {
     cache_creation: m.cc,
     cache_hit_pct: m.input + m.cr > 0 ? Math.round((m.cr / (m.input + m.cr)) * 1000) / 10 : 0,
     cache_saved: Math.round(m.saved * 10000) / 10000,
+    fail_rate: (() => { const f = failByModel.get(m.model); return f && f.total > 0 ? Math.round((f.fails / f.total) * 1000) / 10 : 0 })(),
+    reasoning_tokens: reasonByModel.get(m.model) ?? 0,
+    avg_latency_s: latencyByModel.has(m.model) ? Math.round(latencyByModel.get(m.model)! * 10) / 10 : null,
   })).sort((a, b) => b.cost - a.cost)
 }
 
