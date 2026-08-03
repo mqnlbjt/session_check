@@ -76,7 +76,7 @@ describe('会话导出 Markdown', () => {
     expect(res.headers.get('content-type')).toContain('text/markdown')
     expect(res.headers.get('content-disposition')).toContain('attachment')
     const md = await res.text()
-    expect(md).toContain('title: 老会话')
+    expect(md).toContain('title: "老会话"')
     expect(md).toContain('agent: pi')
     expect(md).toContain('oldquery')
   })

@@ -28,6 +28,6 @@ if (cmd === 'scan') {
   setInterval(janitorRun, 24 * 3600_000)
   startServer(port)
 } else {
-  console.log('用法: spectator [scan|serve]')
+  console.log('用法: spectator [scan|serve|janitor]')
   process.exit(1)
 }

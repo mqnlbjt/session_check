@@ -10,13 +10,15 @@ const VACUUM_THRESHOLD = 50 * 1024 * 1024
 
 export function runJanitor(olderThanDays = 90): JanitorResult {
   // COALESCE(ended_at, started_at)：started 老但仍在活跃的长跑会话不清
+  // datetime() 归一化两侧格式：库存的是 ISO 带 T，直接字符串比较 cutoff 当天会漏清（'T' > ' '）
   const oldSessions = db.prepare(
-    `SELECT id FROM sessions WHERE COALESCE(ended_at, started_at) < datetime('now', ?)`
+    `SELECT id FROM sessions WHERE datetime(COALESCE(ended_at, started_at)) < datetime('now', ?)`
   ).all(`-${olderThanDays} days`) as { id: string }[]
 
   const touched = new Set<string>()
   let messages = 0
   let bytesFreed = 0
+  let corrupt = 0
 
   const tx = db.transaction(() => {
     const update = db.prepare(`UPDATE messages SET blocks_json = ? WHERE id = ?`)
@@ -26,11 +28,17 @@ export function runJanitor(olderThanDays = 90): JanitorResult {
         `SELECT id, blocks_json FROM messages WHERE session_id = ? AND blocks_json LIKE '%tool_result%'`
       ).all(s.id) as { id: number; blocks_json: string }[]
       for (const r of rows) {
-        const blocks = JSON.parse(r.blocks_json) as Block[]
+        let blocks: Block[]
+        try {
+          blocks = JSON.parse(r.blocks_json) as Block[]
+        } catch {
+          corrupt++ // 单条坏数据不拖垮整个 run
+          continue
+        }
         let changed = false
         for (const b of blocks) {
           if (b.type === 'tool_result' && b.output) {
-            bytesFreed += b.output.length
+            bytesFreed += Buffer.byteLength(b.output) // 真实 UTF-8 字节，不是 UTF-16 字符数
             b.output = ''
             changed = true
           }
@@ -51,5 +59,6 @@ export function runJanitor(olderThanDays = 90): JanitorResult {
   db.pragma('wal_checkpoint(TRUNCATE)')
   if (bytesFreed >= VACUUM_THRESHOLD) db.exec('VACUUM')
 
+  if (corrupt > 0) console.warn(`[janitor] 跳过 ${corrupt} 条损坏的 blocks_json`)
   return { sessions: touched.size, messages, bytesFreed }
 }
