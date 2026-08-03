@@ -164,6 +164,7 @@ const emit = defineEmits<{ select: [id: string] }>()
         <span v-if="session.output_tokens">out {{ fmtTokens(session.output_tokens) }}</span>
         <span v-if="session.avg_tps" class="tps">~{{ session.avg_tps }} tok/s</span>
         <div class="review-actions">
+          <a class="review-btn mono export-btn" :href="`/api/sessions/${encodeURIComponent(sessionId)}/export.md`" download>导出</a>
           <button class="review-btn mono" :disabled="reviewing" @click="showReviewMenu = !showReviewMenu">
             {{ reviewing ? '复盘中…' : '复盘 ▾' }}
           </button>
@@ -266,7 +267,7 @@ const emit = defineEmits<{ select: [id: string] }>()
 .review-btn:hover:not(:disabled) { background: rgba(232, 163, 61, 0.12); }
 .review-btn:disabled { opacity: 0.55; cursor: wait; }
 .review-err { color: var(--danger); font-size: 11px; }
-.review-actions { position: relative; margin-left: auto; }
+.review-actions { position: relative; margin-left: auto; display: flex; gap: 6px; }
 .review-actions .review-btn { margin-left: 0; }
 .review-menu {
   position: absolute;
@@ -293,6 +294,8 @@ const emit = defineEmits<{ select: [id: string] }>()
 }
 .menu-item:hover { background: rgba(232, 163, 61, 0.12); color: var(--amber); }
 .persisted { color: var(--codex); font-size: 11px; }
+.export-btn { text-decoration: none; border-color: var(--line); color: var(--dim); }
+.export-btn:hover { color: var(--amber); border-color: var(--amber); }
 .persisted-none { color: var(--faint); font-size: 11px; }
 
 .subs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; align-items: center; }

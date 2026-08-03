@@ -11,7 +11,8 @@
     "build:web": "npm --prefix web run build",
     "test:watch": "vitest",
     "backfill-fts": "tsx src/backfill-fts.ts",
-    "backfill-signals": "tsx src/backfill-signals.ts"
+    "backfill-signals": "tsx src/backfill-signals.ts",
+    "janitor": "tsx src/main.ts janitor"
   },
   "keywords": [],
   "author": "",
