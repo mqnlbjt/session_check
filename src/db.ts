@@ -110,6 +110,17 @@ CREATE TABLE IF NOT EXISTS janitor_log (
   messages    INTEGER NOT NULL,
   bytes_freed INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS suggestions (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_path TEXT NOT NULL,
+  kind         TEXT NOT NULL,     -- guard_rule | model_advice
+  content      TEXT NOT NULL,
+  evidence     TEXT,              -- 依据（信号统计 JSON / 数据摘要）
+  status       TEXT NOT NULL DEFAULT 'pending',  -- pending | adopted | dismissed
+  created_at   TEXT NOT NULL,
+  adopted_to   TEXT
+);
 `)
 
 // FTS5 全文搜索：只索引 text block + tool_call 入参（thinking / tool_result 不索引）
