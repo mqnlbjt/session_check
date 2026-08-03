@@ -33,6 +33,10 @@ export function heatmap() {
 }
 
 // ---- 模型对比：会话数/成本/TPS/平均每会话纠正数 ----
+// 按裸模型名归并：pi 报 "deepseek/deepseek-v4-pro"、claude/codex 报 "deepseek-v4-pro"，是同一模型
+// （用户决策：local/ 前缀也并入官方模型，接受本地代理价格可能虚高）
+const bareModel = (m: string) => (m.includes('/') ? m.split('/').pop()! : m)
+
 export function modelCompare() {
   const rows = db.prepare(`
     SELECT model, COUNT(*) sessions,
@@ -53,15 +57,32 @@ export function modelCompare() {
     `).all() as { model: string; n: number }[]).map((r) => [r.model, r.n])
   )
 
-  return rows.map((r) => ({
-    model: r.model,
-    sessions: r.sessions,
-    input_tokens: r.input,
-    output_tokens: r.output,
-    cost: costOf(r.model, r.input, r.output, r.cr, r.cc),
-    avg_tps: r.tps ? Math.round(r.tps * 10) / 10 : null,
-    avg_corrections: Math.round(((corrByModel.get(r.model) ?? 0) / r.sessions) * 10) / 10,
-  })).sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0))
+  // 按裸名归并：token/成本/纠正直接加，TPS 按会话数加权
+  const merged = new Map<string, {
+    model: string; sessions: number; input: number; output: number
+    cost: number; tpsSum: number; tpsN: number; corrections: number
+  }>()
+  for (const r of rows) {
+    const key = bareModel(r.model)
+    const m = merged.get(key) ?? { model: key, sessions: 0, input: 0, output: 0, cost: 0, tpsSum: 0, tpsN: 0, corrections: 0 }
+    m.sessions += r.sessions
+    m.input += r.input
+    m.output += r.output
+    m.cost += costOf(r.model, r.input, r.output, r.cr, r.cc) ?? 0 // costOf 内部也去前缀，价格一致
+    if (r.tps) { m.tpsSum += r.tps * r.sessions; m.tpsN += r.sessions }
+    m.corrections += corrByModel.get(r.model) ?? 0
+    merged.set(key, m)
+  }
+
+  return [...merged.values()].map((m) => ({
+    model: m.model,
+    sessions: m.sessions,
+    input_tokens: m.input,
+    output_tokens: m.output,
+    cost: m.cost,
+    avg_tps: m.tpsN > 0 ? Math.round((m.tpsSum / m.tpsN) * 10) / 10 : null,
+    avg_corrections: Math.round((m.corrections / m.sessions) * 10) / 10,
+  })).sort((a, b) => b.cost - a.cost)
 }
 
 // ---- 项目成本榜：同项目可能用多模型，按 (项目,模型) 分桶算成本再汇总 ----
