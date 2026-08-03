@@ -390,11 +390,31 @@ app.get('/api/overview', (c) => {
     FROM sessions WHERE ${mainOnly} GROUP BY agent
   `).all()
 
+  // 返工率周趋势：每周活跃主会话中，有 ≥1 次纠正信号的会话占比（近 12 周）
+  const weeklyActive = db.prepare(`
+    SELECT strftime('%Y-W%W', m.ts, 'localtime') w, COUNT(DISTINCT m.session_id) n
+    FROM messages m JOIN sessions s ON s.id = m.session_id
+    WHERE s.${mainOnly} AND m.ts >= datetime('now', '-84 days') GROUP BY w
+  `).all() as { w: string; n: number }[]
+  const weeklyCorrected = new Map(
+    (db.prepare(`
+      SELECT strftime('%Y-W%W', ts, 'localtime') w, COUNT(DISTINCT session_id) n
+      FROM signals WHERE kind = 'correction' GROUP BY w
+    `).all() as { w: string; n: number }[]).map((r) => [r.w, r.n])
+  )
+  const reworkWeekly = weeklyActive.map((r) => ({
+    w: r.w,
+    sessions: r.n,
+    corrected: weeklyCorrected.get(r.w) ?? 0,
+    rate: r.n > 0 ? Math.round(((weeklyCorrected.get(r.w) ?? 0) / r.n) * 1000) / 10 : 0,
+  }))
+
   return c.json({
     today,
     daily,
     models, projects, agents,
     active, agentErrors, topErrorSessions, riskSessions, riskTotals,
+    reworkWeekly,
   })
 })
 

@@ -13,6 +13,7 @@ interface Overview {
   topErrorSessions: { id: string; agent: string; title: string | null; error_count: number; message_count: number }[]
   riskSessions: { id: string; agent: string; title: string | null; n: number; rules: string; has_high: number }[]
   riskTotals: { total: number; high: number }
+  reworkWeekly: { w: string; sessions: number; corrected: number; rate: number }[]
 }
 
 const data = ref<Overview | null>(null)
@@ -140,6 +141,16 @@ function maxOf(nums: (number | null)[]) {
             </rect>
           </svg>
         </div>
+        <div class="card">
+          <h3 class="c-title mono">返工率 / 周 · 近 12 周</h3>
+          <svg :viewBox="`0 0 ${CHART_W} ${CHART_H}`" class="chart">
+            <rect v-for="(b, i) in chartBars(data.reworkWeekly.map((r) => ({ d: r.w, v: r.rate })))" :key="i"
+              :x="b.x" :y="b.y" :width="b.w" :height="b.h"
+              :class="['bar amber', { zero: b.v === 0 }]">
+              <title>{{ b.d }} · {{ b.v }}% 会话被纠正</title>
+            </rect>
+          </svg>
+        </div>
       </section>
 
       <!-- 排行 -->
@@ -245,7 +256,7 @@ function maxOf(nums: (number | null)[]) {
 .k-unit { font-size: 11px; color: var(--dim); font-weight: 400; }
 
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.row.three { grid-template-columns: 1fr 1fr 1fr; }
+.row.three { grid-template-columns: 1fr 1fr 1fr 1fr; }
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
