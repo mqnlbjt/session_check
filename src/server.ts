@@ -12,6 +12,7 @@ import { startReview, reviewStatus, type EngineResult } from './review.js'
 import { renderMarkdown } from './export.js'
 import { heatmap, modelCompare, projectCosts, projectDetail, lessonsAggregate } from './analytics.js'
 import { generateGuardRules, listSuggestions, adoptSuggestion, dismissSuggestion } from './harness.js'
+import { taskModelStats } from './analytics.js'
 import { extractLessons, persistToInstructions, persistToSkill, type PersistMode } from './persist.js'
 
 // 复盘沉淀结果（sessionPk → 写入的文件路径），供 review-status 查询
@@ -100,6 +101,7 @@ app.get('/api/search', (c) => {
 app.get('/api/analytics/heatmap', (c) => c.json(heatmap()))
 app.get('/api/analytics/models', async (c) => c.json(await modelCompare(Number(c.req.query('window') ?? 90))))
 app.get('/api/analytics/projects', (c) => c.json(projectCosts()))
+app.get('/api/analytics/task-models', (c) => c.json(taskModelStats(Number(c.req.query('window') ?? 30))))
 app.get('/api/lessons', (c) => c.json(lessonsAggregate()))
 
 // ---- Harness 建议（期5）----

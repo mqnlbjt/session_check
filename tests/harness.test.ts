@@ -58,6 +58,51 @@ describe('防呆规则生成（LLM 注入）', () => {
   })
 })
 
+describe('任务×模型推荐', () => {
+  it('任务分类规则', async () => {
+    const { classifyTask } = await import('../src/analytics.js')
+    expect(classifyTask('帮我总结一下这周的工作写个周报')).toBe('文档写作')
+    expect(classifyTask('修复登录接口的 bug')).toBe('调试修复')
+    expect(classifyTask('重构用户模块的分层架构')).toBe('重构优化')
+    expect(classifyTask('实现一个全文搜索功能')).toBe('开发实现')
+    expect(classifyTask('什么是分布式租约')).toBe('学习探索')
+    expect(classifyTask('随便聊聊')).toBe('其他')
+  })
+
+  it('同任务下推荐质量相当的最便宜模型', async () => {
+    // 文档写作任务：贵的 gpt-5.5（2 会话）+ 便宜的 deepseek（3 会话），纠正率相当
+    for (let i = 0; i < 2; i++) {
+      const pk = dbmod.saveSessionMeta('pi', { sessionId: `task-doc-exp-${i}`, projectPath: '/data/docs', startedAt: daysAgo(2), title: '写个项目周报总结', model: 'gpt-5.5' })
+      dbmod.appendMessage(pk, 1, { role: 'assistant', ts: daysAgo(2), blocks: [{ type: 'text', text: '好' }], usage: { input: 100, output: 50 } })
+      dbmod.db.prepare(`UPDATE sessions SET input_tokens = 5000000, output_tokens = 100000 WHERE id = ?`).run(pk)
+    }
+    for (let i = 0; i < 3; i++) {
+      const pk = dbmod.saveSessionMeta('pi', { sessionId: `task-doc-cheap-${i}`, projectPath: '/data/docs', startedAt: daysAgo(2), title: '帮我写个复盘文档', model: 'deepseek-v4-pro' })
+      dbmod.appendMessage(pk, 1, { role: 'assistant', ts: daysAgo(2), blocks: [{ type: 'text', text: '好' }], usage: { input: 100, output: 50 } })
+      dbmod.db.prepare(`UPDATE sessions SET input_tokens = 100000, output_tokens = 20000 WHERE id = ?`).run(pk)
+    }
+    const res = await app.request('/api/analytics/task-models?window=30')
+    expect(res.status).toBe(200)
+    const rows = await res.json()
+    const docRows = rows.filter((r: any) => r.task === '文档写作')
+    expect(docRows.length).toBeGreaterThanOrEqual(2)
+    const expensive = docRows.find((r: any) => r.model === 'gpt-5.5')
+    const cheap = docRows.find((r: any) => r.model === 'deepseek-v4-pro')
+    expect(expensive.cost_per_session).toBeGreaterThan(cheap.cost_per_session * 10)
+  })
+
+  it('taskAdvice 产出分任务建议', async () => {
+    const res = await app.request('/api/harness/suggestions')
+    const body = await res.json()
+    const doc = body.taskAdvice.find((a: any) => a.task === '文档写作')
+    expect(doc).toBeTruthy()
+    expect(doc.content).toContain('deepseek-v4-pro')
+    expect(doc.content).toContain('gpt-5.5')
+    const ev = JSON.parse(doc.evidence)
+    expect(ev.recommended.cost_per_session).toBeLessThan(ev.current.cost_per_session)
+  })
+})
+
 describe('建议 API', () => {
   it('GET 返回 pending 优先 + 模型建议', async () => {
     const res = await app.request('/api/harness/suggestions')
@@ -76,9 +121,9 @@ describe('建议 API', () => {
     expect(ev.window_days).toBe(30)
     expect(ev.from.model).toBe('gpt-5.5')
     expect(ev.from.cost).toBeGreaterThan(0)
-    expect(ev.from.sessions).toBe(1)
+    expect(ev.from.sessions).toBe(3) // h-1 + task-doc-exp×2
     expect(ev.to.model).toBe('deepseek-v4-pro')
-    expect(ev.to.sessions).toBe(5)
+    expect(ev.to.sessions).toBe(8) // h-alt×5 + task-doc-cheap×3
     expect(ev.saving_pct).toBeGreaterThan(50)
     // 对比维度齐全
     for (const side of [ev.from, ev.to]) {
