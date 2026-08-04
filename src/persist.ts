@@ -34,6 +34,11 @@ function renderBlock(entries: string[]): string {
 }
 
 function upsertBlock(filePath: string, newEntries: string[]): void {
+  writeFileSync(filePath, computeUpsertedContent(filePath, newEntries))
+}
+
+// 纯函数：计算 upsert 后的完整文件内容（plan 预览 / 确认写盘共用）
+function computeUpsertedContent(filePath: string, newEntries: string[]): string {
   let entries: string[] = []
   let content = ''
   if (existsSync(filePath)) {
@@ -46,10 +51,9 @@ function upsertBlock(filePath: string, newEntries: string[]): void {
   }
   entries = [...newEntries, ...entries].slice(0, MAX_ENTRIES)
   const block = renderBlock(entries)
-  content = content.includes('___SPECTATOR_BLOCK___')
+  return content.includes('___SPECTATOR_BLOCK___')
     ? content.replace('___SPECTATOR_BLOCK___', block)
     : content.trimEnd() + '\n\n' + block + '\n'
-  writeFileSync(filePath, content)
 }
 
 // 写入项目指令文件：claude → CLAUDE.md，pi/codex → AGENTS.md
@@ -98,4 +102,74 @@ ${renderBlock(entries)}
     upsertBlock(filePath, entries)
   }
   return filePath
+}
+
+// ---- 两阶段沉淀：plan 只生成预览不写盘，confirm 时才真正写入 ----
+
+export interface PersistPlan {
+  kind: 'instructions' | 'skill'
+  filePath: string
+  content: string   // 将新增的条目文本（新 skill 文件则为完整内容）
+}
+
+function renderEntries(sessionTitle: string, lessons: Lesson[]): string[] {
+  const date = new Date().toISOString().slice(0, 10)
+  return lessons.map((l) => `- [${date} · ${sessionTitle.slice(0, 30)}] ${l.detail}`)
+}
+
+function skillPathFor(agent: string, projectPath: string): { dir: string | null; skillName: string } {
+  const proj = basename(projectPath).replace(/[^a-zA-Z0-9_-]/g, '-').toLowerCase()
+  const skillName = `lessons-${proj}`
+  const HOME = homedir()
+  const dir = agent === 'claude'
+    ? join(HOME, '.claude/skills', skillName)
+    : agent === 'pi'
+      ? join(HOME, '.pi/agent/skills', skillName)
+      : null
+  return { dir, skillName }
+}
+
+// 生成沉淀计划（不写盘）：预览将写入的目标文件和内容
+export function planPersist(mode: PersistMode, agent: string, projectPath: string, sessionTitle: string, lessons: Lesson[]): PersistPlan | null {
+  if (mode === 'none' || lessons.length === 0) return null
+  const entries = renderEntries(sessionTitle, lessons)
+
+  if (mode === 'skill') {
+    const { dir, skillName } = skillPathFor(agent, projectPath)
+    if (dir) {
+      const filePath = join(dir, 'SKILL.md')
+      if (!existsSync(filePath)) {
+        // 新 skill：预览完整文件
+        return {
+          kind: 'skill',
+          filePath,
+          content: `---
+name: ${skillName}
+description: 项目 ${basename(projectPath)} 的历史教训（spectator 复盘自动沉淀）。在这个项目干活前先读。
+---
+
+# ${basename(projectPath)} 项目教训
+
+${renderBlock(entries)}
+`,
+        }
+      }
+      return { kind: 'skill', filePath, content: entries.join('\n') }
+    }
+    // codex 无 skill 体系，回落 instructions
+  }
+
+  const filePath = join(projectPath, agent === 'claude' ? 'CLAUDE.md' : 'AGENTS.md')
+  return { kind: 'instructions', filePath, content: entries.join('\n') }
+}
+
+// 确认执行：把计划的内容真正写盘（content 里每行 "- [..." 是一条新教训；新 skill 是完整文件）
+export function applyPersistPlan(plan: PersistPlan): void {
+  if (plan.kind === 'skill' && plan.content.startsWith('---')) {
+    mkdirSync(join(plan.filePath, '..'), { recursive: true })
+    writeFileSync(plan.filePath, plan.content)
+    return
+  }
+  const entries = plan.content.split('\n').filter((l) => l.startsWith('- ['))
+  upsertBlock(plan.filePath, entries)
 }

@@ -122,6 +122,17 @@ CREATE TABLE IF NOT EXISTS suggestions (
   created_at   TEXT NOT NULL,
   adopted_to   TEXT
 );
+
+CREATE TABLE IF NOT EXISTS pending_writes (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id   TEXT,
+  kind         TEXT NOT NULL,     -- instructions | skill
+  target_path  TEXT NOT NULL,
+  content      TEXT NOT NULL,     -- 将写入的内容预览
+  status       TEXT NOT NULL DEFAULT 'pending',  -- pending | confirmed | discarded
+  created_at   TEXT NOT NULL,
+  confirmed_at TEXT
+);
 `)
 
 // FTS5 全文搜索：只索引 text block + tool_call 入参（thinking / tool_result 不索引）
@@ -413,4 +424,18 @@ export function setCumulativeUsage(sessionPk: string, usage: Usage) {
 
 export function saveSource(row: SourceRow) {
   upsertSource.run(row)
+}
+
+// ---- 待确认写入（两阶段沉淀）----
+export function createPendingWrite(w: { session_id?: string; kind: string; target_path: string; content: string }): number {
+  const info = db.prepare(
+    `INSERT INTO pending_writes (session_id, kind, target_path, content, status, created_at) VALUES (?, ?, ?, ?, 'pending', ?)`
+  ).run(w.session_id ?? null, w.kind, w.target_path, w.content, new Date().toISOString())
+  return Number(info.lastInsertRowid)
+}
+
+export function listPendingWrites() {
+  return db.prepare(
+    `SELECT * FROM pending_writes ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, created_at DESC LIMIT 100`
+  ).all()
 }

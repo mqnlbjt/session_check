@@ -6,14 +6,14 @@ import { streamSSE } from 'hono/streaming'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { db, getSessionPkByPath, insertReview, searchMessages } from './db.js'
+import { db, getSessionPkByPath, insertReview, searchMessages, createPendingWrite } from './db.js'
 import { costOf } from './pricing.js'
 import { startReview, reviewStatus, type EngineResult } from './review.js'
 import { renderMarkdown } from './export.js'
 import { heatmap, modelCompare, projectCosts, projectDetail, lessonsAggregate } from './analytics.js'
 import { generateGuardRules, listSuggestions, adoptSuggestion, dismissSuggestion } from './harness.js'
 import { taskModelStats } from './analytics.js'
-import { extractLessons, persistToInstructions, persistToSkill, type PersistMode } from './persist.js'
+import { extractLessons, planPersist, applyPersistPlan, type PersistMode } from './persist.js'
 
 // 复盘沉淀结果（sessionPk → 写入的文件路径），供 review-status 查询
 export const lastPersist = new Map<string, string>()
@@ -103,6 +103,33 @@ app.get('/api/analytics/models', async (c) => c.json(await modelCompare(Number(c
 app.get('/api/analytics/projects', (c) => c.json(projectCosts()))
 app.get('/api/analytics/task-models', (c) => c.json(taskModelStats(Number(c.req.query('window') ?? 30))))
 app.get('/api/lessons', (c) => c.json(lessonsAggregate()))
+
+// ---- 待确认写入（沉淀两阶段：确认才落盘）----
+app.get('/api/pending-writes', (c) => {
+  return c.json(db.prepare(
+    `SELECT * FROM pending_writes ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, created_at DESC LIMIT 100`
+  ).all())
+})
+
+app.post('/api/pending-writes/:id/confirm', (c) => {
+  const row = db.prepare(`SELECT * FROM pending_writes WHERE id = ?`).get(Number(c.req.param('id'))) as any
+  if (!row || row.status !== 'pending') return c.json({ error: '不存在或已处理' }, 404)
+  try {
+    applyPersistPlan({ kind: row.kind, filePath: row.target_path, content: row.content })
+  } catch (e: any) {
+    return c.json({ error: `写入失败：${e?.message ?? '未知错误'}` }, 500)
+  }
+  db.prepare(`UPDATE pending_writes SET status = 'confirmed', confirmed_at = ? WHERE id = ?`)
+    .run(new Date().toISOString(), row.id)
+  return c.json({ ok: true, written_to: row.target_path })
+})
+
+app.post('/api/pending-writes/:id/discard', (c) => {
+  const n = db.prepare(`UPDATE pending_writes SET status = 'discarded' WHERE id = ? AND status = 'pending'`)
+    .run(Number(c.req.param('id'))).changes
+  if (!n) return c.json({ error: '不存在或已处理' }, 404)
+  return c.json({ ok: true })
+})
 
 // ---- Harness 建议（期5）----
 // 生成是异步的（LLM 调用 1-3 分钟）：POST 立即返回，前端轮询 GET 等新建议
@@ -293,7 +320,7 @@ app.post('/api/sessions/:id/review', async (c) => {
     )
     console.log(`[review] ${id} 完成 (${r.source})`)
 
-    // 沉淀：把教训写回 agent 的记忆文件
+    // 沉淀两阶段：生成待确认写入（ Harness 页确认后才真正落盘 ）
     if (persist !== 'none' && session.project_path) {
       const lessons = extractLessons(r.findings)
       if (lessons.length === 0) {
@@ -301,13 +328,14 @@ app.post('/api/sessions/:id/review', async (c) => {
       } else {
         try {
           const title = session.title ?? id
-          const filePath = persist === 'skill'
-            ? persistToSkill(agent, session.project_path, title, lessons)
-            : persistToInstructions(session.project_path, agent, title, lessons)
-          lastPersist.set(id, filePath)
-          console.log(`[review] 已沉淀到 ${filePath}`)
+          const plan = planPersist(persist, agent, session.project_path, title, lessons)
+          if (plan) {
+            createPendingWrite({ session_id: id, kind: plan.kind, target_path: plan.filePath, content: plan.content })
+            lastPersist.set(id, `pending:${plan.filePath}`)
+            console.log(`[review] 已生成待确认沉淀 → ${plan.filePath}`)
+          }
         } catch (e) {
-          console.error('[review] 沉淀失败:', e)
+          console.error('[review] 沉淀计划生成失败:', e)
         }
       }
     }

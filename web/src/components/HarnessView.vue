@@ -35,8 +35,19 @@ const METRIC_ROWS: { key: keyof AdviceMetrics; label: string; fmt: (v: any) => s
   { key: 'cache_hit_pct', label: '缓存命中', fmt: (v) => `${v}%` },
 ]
 interface Candidate { project_path: string; corrections: number }
+interface PendingWrite {
+  id: number
+  session_id: string | null
+  kind: 'instructions' | 'skill'
+  target_path: string
+  content: string
+  status: 'pending' | 'confirmed' | 'discarded'
+  created_at: string
+  confirmed_at: string | null
+}
 
 const suggestions = ref<Suggestion[]>([])
+const pendingWrites = ref<PendingWrite[]>([])
 const modelAdvice = ref<ModelAdvice[]>([])
 const taskAdvice = ref<{ task: string; content: string; evidence: string }[]>([])
 const taskMatrix = ref<{ task: string; model: string; sessions: number; cost: number; cost_per_session: number; avg_corrections: number }[]>([])
@@ -47,6 +58,7 @@ const showDismissed = ref(false)
 const feedback = ref('')
 
 const pending = computed(() => suggestions.value.filter((s) => s.status === 'pending'))
+const pendingWritesActive = computed(() => pendingWrites.value.filter((w) => w.status === 'pending'))
 const adopted = computed(() => suggestions.value.filter((s) => s.status === 'adopted'))
 const dismissed = computed(() => suggestions.value.filter((s) => s.status === 'dismissed'))
 
@@ -61,6 +73,7 @@ async function load() {
     taskAdvice.value = d.taskAdvice ?? []
     candidates.value = d.candidates ?? []
     taskMatrix.value = await fetch('/api/analytics/task-models?window=30').then((r) => r.json()).catch(() => [])
+    pendingWrites.value = await fetch('/api/pending-writes').then((r) => r.json()).catch(() => [])
   } finally {
     loading.value = false
   }
@@ -128,6 +141,23 @@ function evidenceText(e: string | null): string {
   } catch { return '' }
 }
 
+async function confirmWrite(w: PendingWrite) {
+  const res = await fetch(`/api/pending-writes/${w.id}/confirm`, { method: 'POST' })
+  if (res.ok) {
+    const body = await res.json()
+    feedback.value = `已写入 ${body.written_to}`
+  } else {
+    feedback.value = `写入失败：${(await res.json()).error ?? res.status}`
+  }
+  await load()
+}
+
+async function discardWrite(w: PendingWrite) {
+  await fetch(`/api/pending-writes/${w.id}/discard`, { method: 'POST' })
+  feedback.value = '已放弃该写入'
+  await load()
+}
+
 function shortPath(p: string) {
   const parts = p.split('/')
   return parts.length > 2 ? '…/' + parts.slice(-2).join('/') : p
@@ -139,6 +169,22 @@ function shortPath(p: string) {
     <div v-if="loading" class="hint">加载中…</div>
     <template v-else>
       <div v-if="feedback" class="feedback mono">{{ feedback }}</div>
+
+      <!-- 待确认的写入（复盘沉淀两阶段：确认才落盘） -->
+      <section v-if="pendingWritesActive.length" class="card pending-writes">
+        <h3 class="c-title mono">待确认的写入 · {{ pendingWritesActive.length }}</h3>
+        <div v-for="w in pendingWritesActive" :key="w.id" class="write-item">
+          <div class="w-head mono">
+            <span class="w-kind" :class="w.kind">{{ w.kind === 'skill' ? 'SKILL' : 'AGENTS.md' }}</span>
+            <span class="w-path" :title="w.target_path">{{ w.target_path }}</span>
+          </div>
+          <pre class="w-content">{{ w.content }}</pre>
+          <div class="w-actions">
+            <button class="btn adopt" @click="confirmWrite(w)">确认写入</button>
+            <button class="btn dismiss" @click="discardWrite(w)">放弃</button>
+          </div>
+        </div>
+      </section>
 
       <!-- 模型建议 -->
       <section class="card">
@@ -307,6 +353,20 @@ function shortPath(p: string) {
 .btn:disabled { opacity: 0.5; cursor: wait; }
 .gen-panel { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
 .gen-label { font-size: 10px; color: var(--faint); }
+
+/* 待确认写入 */
+.pending-writes { border-color: rgba(232, 163, 61, 0.4); }
+.write-item { background: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
+.w-head { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; font-size: 11px; }
+.w-kind { flex-shrink: 0; font-size: 10px; padding: 1px 6px; border-radius: 3px; border: 1px solid rgba(232, 163, 61, 0.4); color: var(--amber); }
+.w-kind.skill { border-color: rgba(91, 157, 214, 0.4); color: var(--codex); }
+.w-path { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.w-content {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  padding: 8px 10px; font-size: 11px; color: var(--text); line-height: 1.6;
+  white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; margin: 0 0 8px;
+}
+.w-actions { display: flex; gap: 8px; }
 
 /* 任务×模型矩阵 */
 .matrix-wrap { margin-top: 12px; }
