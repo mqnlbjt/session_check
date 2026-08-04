@@ -174,7 +174,8 @@ const emit = defineEmits<{ select: [id: string] }>()
             <button class="menu-item" @click="triggerReview('skill')">复盘 + 沉淀为 skill</button>
           </div>
         </div>
-        <span v-if="persistedTo" class="persisted">已沉淀 → {{ persistedTo }}</span>
+        <span v-if="persistedTo?.startsWith('pending:')" class="persisted">已生成待确认沉淀 → 去 Harness 页确认</span>
+        <span v-else-if="persistedTo" class="persisted">已沉淀 → {{ persistedTo }}</span>
         <span v-else-if="persistedTo === '' &amp;&amp; !reviewing" class="persisted-none">没有可沉淀的教训</span>
         <span v-if="reviewError" class="review-err">{{ reviewError }}</span>
       </div>
