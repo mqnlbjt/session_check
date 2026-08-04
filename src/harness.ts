@@ -6,7 +6,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { db } from './db.js'
-import { modelCompare } from './analytics.js'
+import { modelCompare, taskModelStats } from './analytics.js'
 import { persistToInstructions } from './persist.js'
 import type { AgentType } from './model.js'
 
@@ -162,6 +162,38 @@ export async function modelAdvice(): Promise<{ content: string; evidence: string
   return advice
 }
 
+// 任务×模型推荐：同一任务类型下，纠正率相当（容差 +0.3）的最便宜模型
+// 样本量门槛：每个模型在该任务下 ≥2 会话；当前用的比推荐的贵 1.5 倍以上才建议
+export function taskAdvice(windowDays = 30): { task: string; content: string; evidence: string }[] {
+  const stats = taskModelStats(windowDays)
+  const byTask = new Map<string, typeof stats>()
+  for (const s of stats) {
+    if (s.sessions < 2) continue
+    const arr = byTask.get(s.task) ?? []
+    arr.push(s)
+    byTask.set(s.task, arr)
+  }
+  const advice: { task: string; content: string; evidence: string }[] = []
+  for (const [task, models] of byTask) {
+    if (task === '其他' || models.length < 2) continue
+    const minCorr = Math.min(...models.map((m) => m.avg_corrections))
+    const eligible = models.filter((m) => m.avg_corrections <= minCorr + 0.3)
+    const recommended = eligible.reduce((a, b) => (a.cost_per_session <= b.cost_per_session ? a : b))
+    const current = models.reduce((a, b) => (a.cost > b.cost ? a : b)) // 花钱最多的当「现状」
+    if (recommended.model === current.model) continue
+    if (current.cost_per_session < recommended.cost_per_session * 1.5) continue
+    if (current.cost < 2) continue // 绝对金额太小的建议是噪音（省 50% 但只值 $0.05）
+    const saving = Math.min(99, Math.round((1 - recommended.cost_per_session / current.cost_per_session) * 100))
+    advice.push({
+      task,
+      content: `「${task}」类任务：你在用 ${current.model}（$${current.cost_per_session}/会话、纠正率 ${current.avg_corrections}），` +
+        `${recommended.model} 同任务纠正率 ${recommended.avg_corrections} 相当、$${recommended.cost_per_session}/会话——省 ${saving}%`,
+      evidence: JSON.stringify({ task, recommended, current, saving_pct: saving, window_days: windowDays }),
+    })
+  }
+  return advice.sort((a, b) => JSON.parse(b.evidence).saving_pct - JSON.parse(a.evidence).saving_pct)
+}
+
 export async function listSuggestions() {
   const suggestions = db.prepare(
     `SELECT * FROM suggestions ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'adopted' THEN 1 ELSE 2 END, created_at DESC`
@@ -173,7 +205,7 @@ export async function listSuggestions() {
     WHERE sig.kind = 'correction' AND s.project_path IS NOT NULL
     GROUP BY s.project_path ORDER BY corrections DESC LIMIT 10
   `).all()
-  return { suggestions, modelAdvice: await modelAdvice(), candidates }
+  return { suggestions, modelAdvice: await modelAdvice(), taskAdvice: taskAdvice(), candidates }
 }
 
 export function adoptSuggestion(id: number): { adopted_to: string } | null {

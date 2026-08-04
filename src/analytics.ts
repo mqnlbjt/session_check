@@ -248,6 +248,58 @@ async function gitActivity(projectPath: string, sinceDays: number): Promise<{ ts
   return commits
 }
 
+// ---- 任务分类：按会话标题规则打标（顺序即优先级）----
+const TASK_RULES: [RegExp, string][] = [
+  [/周报|日报|总结|复盘|文档|报告|PPT|讲义|博客|文章|readme/i, '文档写作'],
+  [/修复|fix|bug|报错|错误|挂了|不行|失败|异常|排查/i, '调试修复'],
+  [/重构|refactor|优化|清理|瘦身/i, '重构优化'],
+  [/数据|迁移|导入|清洗|sql|统计|报表/i, '数据处理'],
+  [/学习|什么是|解释|原理|复习|面试|怎么看|区别/i, '学习探索'],
+  [/实现|开发|功能|接口|新增|添加|支持|接入|搭建/i, '开发实现'],
+]
+
+export function classifyTask(title: string | null): string {
+  if (!title) return '其他'
+  for (const [re, task] of TASK_RULES) if (re.test(title)) return task
+  return '其他'
+}
+
+// ---- 任务×模型统计：每个任务类型下各模型的成本/纠正/产出 ----
+export function taskModelStats(windowDays = 30) {
+  const window = `datetime('now', '-${Math.trunc(windowDays)} days')`
+  const corrBySession = new Map(
+    (db.prepare(`SELECT session_id, COUNT(*) n FROM signals WHERE kind = 'correction' GROUP BY session_id`).all() as { session_id: string; n: number }[])
+      .map((r) => [r.session_id, r.n])
+  )
+  const withId = db.prepare(`
+    SELECT id, title, model, input_tokens, output_tokens, cache_read, cache_creation
+    FROM sessions
+    WHERE ${MAIN_ONLY} AND model IS NOT NULL AND title IS NOT NULL AND started_at >= ${window}
+  `).all() as { id: string; title: string; model: string; input_tokens: number; output_tokens: number; cache_read: number; cache_creation: number }[]
+
+  const agg = new Map<string, { task: string; model: string; sessions: number; cost: number; corrections: number; output_tokens: number }>()
+  for (const r of withId) {
+    const task = classifyTask(r.title)
+    const model = bareModel(r.model)
+    const key = `${task}|${model}`
+    const a = agg.get(key) ?? { task, model, sessions: 0, cost: 0, corrections: 0, output_tokens: 0 }
+    a.sessions++
+    a.cost += costOf(r.model, r.input_tokens, r.output_tokens, r.cache_read, r.cache_creation) ?? 0
+    a.corrections += corrBySession.get(r.id) ?? 0
+    a.output_tokens += r.output_tokens
+    agg.set(key, a)
+  }
+  return [...agg.values()].map((a) => ({
+    task: a.task,
+    model: a.model,
+    sessions: a.sessions,
+    cost: Math.round(a.cost * 100) / 100,
+    cost_per_session: Math.round((a.cost / a.sessions) * 100) / 100,
+    avg_corrections: Math.round((a.corrections / a.sessions) * 10) / 10,
+    output_tokens: a.output_tokens,
+  })).sort((a, b) => a.task.localeCompare(b.task) || b.cost - a.cost)
+}
+
 // ---- 项目成本榜：同项目可能用多模型，按 (项目,模型) 分桶算成本再汇总 ----
 export function projectCosts(limit = 20) {
   const rows = db.prepare(`

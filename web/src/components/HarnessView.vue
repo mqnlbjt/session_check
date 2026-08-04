@@ -38,6 +38,8 @@ interface Candidate { project_path: string; corrections: number }
 
 const suggestions = ref<Suggestion[]>([])
 const modelAdvice = ref<ModelAdvice[]>([])
+const taskAdvice = ref<{ task: string; content: string; evidence: string }[]>([])
+const taskMatrix = ref<{ task: string; model: string; sessions: number; cost: number; cost_per_session: number; avg_corrections: number }[]>([])
 const candidates = ref<Candidate[]>([])
 const loading = ref(true)
 const generatingFor = ref<string | null>(null)
@@ -56,7 +58,9 @@ async function load() {
     const d = await fetch('/api/harness/suggestions').then((r) => r.json())
     suggestions.value = d.suggestions
     modelAdvice.value = d.modelAdvice
+    taskAdvice.value = d.taskAdvice ?? []
     candidates.value = d.candidates ?? []
+    taskMatrix.value = await fetch('/api/analytics/task-models?window=30').then((r) => r.json()).catch(() => [])
   } finally {
     loading.value = false
   }
@@ -168,6 +172,34 @@ function shortPath(p: string) {
         </div>
       </section>
 
+      <!-- 任务×模型推荐 -->
+      <section class="card">
+        <h3 class="c-title mono">任务 × 模型 · 什么任务用什么模型 · 近 30 天</h3>
+        <div v-for="(a, i) in taskAdvice" :key="i" class="advice">
+          <span class="bulb">🎯</span>
+          <span class="advice-text">{{ a.content }}</span>
+        </div>
+        <div v-if="!taskAdvice.length" class="hint">各任务下的模型选择当前都比较合理</div>
+        <details class="matrix-wrap">
+          <summary class="mono">完整矩阵（{{ taskMatrix.length }} 行）</summary>
+          <table class="tbl">
+            <thead>
+              <tr class="mono"><th>任务</th><th>模型</th><th>会话</th><th>成本/会话</th><th>总成本</th><th>纠正/会话</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="(r, i) in taskMatrix" :key="i">
+                <td>{{ r.task }}</td>
+                <td class="mono">{{ r.model }}</td>
+                <td>{{ r.sessions }}</td>
+                <td>${{ r.cost_per_session }}</td>
+                <td>${{ r.cost }}</td>
+                <td :class="{ warn: r.avg_corrections >= 1 }">{{ r.avg_corrections }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+      </section>
+
       <!-- 防呆规则建议 -->
       <section class="card">
         <h3 class="c-title mono">防呆规则 · 由纠正信号驱动</h3>
@@ -275,6 +307,16 @@ function shortPath(p: string) {
 .btn:disabled { opacity: 0.5; cursor: wait; }
 .gen-panel { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
 .gen-label { font-size: 10px; color: var(--faint); }
+
+/* 任务×模型矩阵 */
+.matrix-wrap { margin-top: 12px; }
+.matrix-wrap summary { font-size: 11px; color: var(--dim); cursor: pointer; }
+.matrix-wrap summary:hover { color: var(--amber); }
+.tbl { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+.tbl th { text-align: left; font-size: 10px; color: var(--faint); font-weight: 500; padding: 4px 10px 8px 0; border-bottom: 1px solid var(--line); }
+.tbl td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); color: var(--text); }
+.tbl tr:last-child td { border-bottom: none; }
+.tbl .warn { color: var(--danger); }
 
 .done-item { display: flex; gap: 10px; padding: 7px 4px; border-bottom: 1px solid var(--line); font-size: 12px; align-items: baseline; }
 .done-item:last-child { border-bottom: none; }
