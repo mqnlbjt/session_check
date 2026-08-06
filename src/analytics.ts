@@ -169,12 +169,17 @@ export async function modelCompare(windowDays = 90) {
     }
   }
 
-  return [...merged.values()].map((m) => ({
+  return [...merged.values()].map((m) => {
+    // 单会话工作负载（复杂度代理）：本模型处理的总 token 量 / 会话数
+    // 含 cache_read/cache_creation——缓存读也是真实上下文，只有 0.1x 计价不意味着它没被处理
+    const total_tokens = m.input + m.output + m.cr + m.cc
+    return {
     model: m.model,
     sessions: m.sessions,
     input_tokens: m.input,
     output_tokens: m.output,
     cost: m.cost,
+    avg_workload: m.sessions > 0 ? Math.round(total_tokens / m.sessions) : 0,
     avg_tps: m.tpsN > 0 ? Math.round((m.tpsSum / m.tpsN) * 10) / 10 : null,
     avg_corrections: Math.round((m.corrections / m.sessions) * 10) / 10,
     cache_read: m.cr,
@@ -187,7 +192,7 @@ export async function modelCompare(windowDays = 90) {
     active_hours: Math.round((activeByModel.get(m.model) ?? 0) * 10) / 10,
     commits: prodByModel.get(m.model)?.commits ?? 0,
     code_lines: prodByModel.get(m.model)?.lines ?? 0,
-  })).sort((a, b) => b.cost - a.cost)
+  }}).sort((a, b) => b.cost - a.cost)
 }
 
 // ---- git 仓库发现：会话项目路径 ∪ ~/data 下两层内的仓库 ----
@@ -277,16 +282,17 @@ export function taskModelStats(windowDays = 30) {
     WHERE ${MAIN_ONLY} AND model IS NOT NULL AND title IS NOT NULL AND started_at >= ${window}
   `).all() as { id: string; title: string; model: string; input_tokens: number; output_tokens: number; cache_read: number; cache_creation: number }[]
 
-  const agg = new Map<string, { task: string; model: string; sessions: number; cost: number; corrections: number; output_tokens: number }>()
+  const agg = new Map<string, { task: string; model: string; sessions: number; cost: number; corrections: number; output_tokens: number; total_tokens: number }>()
   for (const r of withId) {
     const task = classifyTask(r.title)
     const model = bareModel(r.model)
     const key = `${task}|${model}`
-    const a = agg.get(key) ?? { task, model, sessions: 0, cost: 0, corrections: 0, output_tokens: 0 }
+    const a = agg.get(key) ?? { task, model, sessions: 0, cost: 0, corrections: 0, output_tokens: 0, total_tokens: 0 }
     a.sessions++
     a.cost += costOf(r.model, r.input_tokens, r.output_tokens, r.cache_read, r.cache_creation) ?? 0
     a.corrections += corrBySession.get(r.id) ?? 0
     a.output_tokens += r.output_tokens
+    a.total_tokens += r.input_tokens + r.output_tokens + r.cache_read + r.cache_creation
     agg.set(key, a)
   }
   return [...agg.values()].map((a) => ({
@@ -297,6 +303,7 @@ export function taskModelStats(windowDays = 30) {
     cost_per_session: Math.round((a.cost / a.sessions) * 100) / 100,
     avg_corrections: Math.round((a.corrections / a.sessions) * 10) / 10,
     output_tokens: a.output_tokens,
+    avg_workload: a.sessions > 0 ? Math.round(a.total_tokens / a.sessions) : 0,
   })).sort((a, b) => a.task.localeCompare(b.task) || b.cost - a.cost)
 }
 

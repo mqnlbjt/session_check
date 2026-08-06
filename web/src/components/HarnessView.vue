@@ -16,6 +16,7 @@ interface AdviceMetrics {
   model: string; sessions: number; cost: number; avg_corrections: number
   fail_rate: number; avg_latency_s: number | null; avg_tps: number | null
   cache_hit_pct: number; active_hours: number; commits: number; code_lines: number
+  avg_workload: number
 }
 interface AdviceEvidence { window_days: number; from: AdviceMetrics; to: AdviceMetrics; saving_pct: number }
 
@@ -26,6 +27,7 @@ function parseEvidence(e: string): AdviceEvidence | null {
 const METRIC_ROWS: { key: keyof AdviceMetrics; label: string; fmt: (v: any) => string; betterLow?: boolean }[] = [
   { key: 'cost', label: '成本', fmt: (v) => `$${Number(v).toFixed(1)}`, betterLow: true },
   { key: 'sessions', label: '会话数', fmt: String },
+  { key: 'avg_workload', label: '工作量/会话', fmt: (v) => v > 0 ? `${Math.round(Number(v) / 1000)}k tok` : '—' },
   { key: 'code_lines', label: '代码行', fmt: (v) => v > 0 ? Number(v).toLocaleString() : '—' },
   { key: 'active_hours', label: '活跃时长', fmt: (v) => v > 0 ? `${v}h` : '—' },
   { key: 'avg_corrections', label: '纠正/会话', fmt: String, betterLow: true },
@@ -50,7 +52,7 @@ const suggestions = ref<Suggestion[]>([])
 const pendingWrites = ref<PendingWrite[]>([])
 const modelAdvice = ref<ModelAdvice[]>([])
 const taskAdvice = ref<{ task: string; content: string; evidence: string }[]>([])
-const taskMatrix = ref<{ task: string; model: string; sessions: number; cost: number; cost_per_session: number; avg_corrections: number }[]>([])
+const taskMatrix = ref<{ task: string; model: string; sessions: number; cost: number; cost_per_session: number; avg_corrections: number; avg_workload: number }[]>([])
 const candidates = ref<Candidate[]>([])
 const loading = ref(true)
 const generatingFor = ref<string | null>(null)
@@ -230,7 +232,7 @@ function shortPath(p: string) {
           <summary class="mono">完整矩阵（{{ taskMatrix.length }} 行）</summary>
           <table class="tbl">
             <thead>
-              <tr class="mono"><th>任务</th><th>模型</th><th>会话</th><th>成本/会话</th><th>总成本</th><th>纠正/会话</th></tr>
+              <tr class="mono"><th>任务</th><th>模型</th><th>会话</th><th>成本/会话</th><th>总成本</th><th>工作量/会话</th><th>纠正/会话</th></tr>
             </thead>
             <tbody>
               <tr v-for="(r, i) in taskMatrix" :key="i">
@@ -239,6 +241,7 @@ function shortPath(p: string) {
                 <td>{{ r.sessions }}</td>
                 <td>${{ r.cost_per_session }}</td>
                 <td>${{ r.cost }}</td>
+                <td class="mono">{{ r.avg_workload ? Math.round(r.avg_workload / 1000) + 'k tok' : '—' }}</td>
                 <td :class="{ warn: r.avg_corrections >= 1 }">{{ r.avg_corrections }}</td>
               </tr>
             </tbody>
