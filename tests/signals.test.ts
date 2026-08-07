@@ -74,3 +74,48 @@ describe('返工信号检测', () => {
     expect(c.n).toBe(3)
   })
 })
+
+// ---- 期6 #12：误报治理 ----
+describe('信号误报治理（#12 P3）', () => {
+  it('第一人称纠错（我搞错/我的错）不算 correction', async () => {
+    const { scanSignals } = await import('../src/signal-rules.js')
+    expect(scanSignals('是我搞错了，你说得对')).toEqual([])
+    expect(scanSignals('我的错，之前理解偏了')).toEqual([])
+    expect(scanSignals('那个型号说错了 是另一款，我记错了')).toEqual([])
+    // 纠正 agent 的仍然算
+    expect(scanSignals('你搞错了，不是这个文件').some((h) => h.kind === 'correction')).toBe(true)
+  })
+
+  it('subagent 任务书模板（你是…专家）不触发', async () => {
+    const { scanSignals } = await import('../src/signal-rules.js')
+    const task = '你是资深 后端服务专家，请审查以下代码，把不对的地方指出来并修复'
+    expect(scanSignals(task)).toEqual([])
+  })
+})
+
+describe('snippet 匹配点上下文（#12 P2）', () => {
+  it('长消息的 snippet 截取匹配点前后各 40 字符，而非消息开头', async () => {
+    const { scanSignals } = await import('../src/signal-rules.js')
+    const head = '我们先讨论一下整体架构和模块划分的事情'.repeat(6) // 108 字铺垫
+    const text = head + '这个地方不对，应该走另一条路' + '后续还有一些补充说明'.repeat(6)
+    const hit = scanSignals(text).find((h) => h.rule === 'wrong')
+    expect(hit).toBeTruthy()
+    expect(hit!.snippet).toContain('不对')
+    expect(hit!.snippet.startsWith('我们先讨论')).toBe(false) // 不是从开头截
+    expect(hit!.snippet.length).toBeLessThanOrEqual(100)
+  })
+
+  it('短消息 snippet 保持完整', async () => {
+    const { scanSignals } = await import('../src/signal-rules.js')
+    const hit = scanSignals('不对，你改错文件了').find((h) => h.rule === 'wrong')
+    expect(hit!.snippet).toBe('不对，你改错文件了')
+  })
+})
+
+describe('第一人称排除扩展（#12 P3 review 补强）', () => {
+  it('第一人称认错时所有 correction 规则都不记', async () => {
+    const { scanSignals } = await import('../src/signal-rules.js')
+    // 用户自己认错 + 要求重来：不是 agent 的锅，correction 全不记
+    expect(scanSignals('我搞错了，重来一遍吧').filter((h) => h.kind === 'correction')).toEqual([])
+  })
+})

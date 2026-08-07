@@ -65,21 +65,45 @@ const RULE_LABEL: Record<string, string> = {
   'stop-change': '别改/回退', 'why-did-you': '你为什么/谁让你',
 }
 
-// 项目的 top 纠正信号（规则 + 频次 + 样本）
+// 取信号消息的前一条 assistant 摘要（截 200 字）——LLM 需要看到「agent 做了什么 → 用户纠正什么」（#12 P2）
+const prevAssistantStmt = db.prepare(`
+  SELECT blocks_json FROM messages
+  WHERE session_id = ? AND role = 'assistant' AND seq < (SELECT seq FROM messages WHERE id = ?)
+  ORDER BY seq DESC LIMIT 1
+`)
+function prevAssistantSummary(sessionId: string, messageId: number): string | null {
+  const row = prevAssistantStmt.get(sessionId, messageId) as { blocks_json: string } | undefined
+  if (!row) return null
+  try {
+    const blocks = JSON.parse(row.blocks_json) as { type: string; text?: string }[]
+    const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join(' ')
+      .replace(/\s+/g, ' ').trim()
+    return text ? text.slice(0, 200) : null
+  } catch { return null }
+}
+
+// 项目的 top 纠正信号（规则 + 频次 + 样本），90 天滚动窗——旧模式不霸榜，采纳后自然消退（#12 P1）
+const SIGNAL_WINDOW_DAYS = 90
+// 90 天滚动窗起点——所有信号查询共用，保证窗口口径一致
+function windowSince(): string {
+  return new Date(Date.now() - SIGNAL_WINDOW_DAYS * 86400000).toISOString()
+}
 function topCorrectionSignals(projectPath: string, limit = 3) {
+  const since = windowSince()
   const rules = db.prepare(`
     SELECT sig.rule, COUNT(*) n FROM signals sig
     JOIN sessions s ON s.id = sig.session_id
-    WHERE s.project_path = ? AND sig.kind = 'correction'
+    WHERE s.project_path = ? AND sig.kind = 'correction' AND sig.ts >= ?
     GROUP BY sig.rule ORDER BY n DESC LIMIT ?
-  `).all(projectPath, limit) as { rule: string; n: number }[]
+  `).all(projectPath, since, limit) as { rule: string; n: number }[]
   return rules.map((r) => ({
     ...r,
     samples: (db.prepare(`
-      SELECT sig.snippet FROM signals sig JOIN sessions s ON s.id = sig.session_id
-      WHERE s.project_path = ? AND sig.kind = 'correction' AND sig.rule = ? AND sig.snippet IS NOT NULL
+      SELECT sig.snippet, sig.session_id, sig.message_id FROM signals sig JOIN sessions s ON s.id = sig.session_id
+      WHERE s.project_path = ? AND sig.kind = 'correction' AND sig.rule = ? AND sig.snippet IS NOT NULL AND sig.ts >= ?
       ORDER BY sig.ts DESC LIMIT 3
-    `).all(projectPath, r.rule) as { snippet: string }[]).map((x) => x.snippet),
+    `).all(projectPath, r.rule, since) as { snippet: string; session_id: string; message_id: number }[])
+      .map((x) => ({ snippet: x.snippet, prev: prevAssistantSummary(x.session_id, x.message_id) })),
   }))
 }
 
@@ -90,13 +114,38 @@ function dominantAgent(projectPath: string): AgentType {
   return row?.agent ?? 'pi'
 }
 
-function buildPrompt(projectPath: string, signals: ReturnType<typeof topCorrectionSignals>): string {
+// give-up 挫折样本作痛点佐证：不进频次排序，只附 1-2 条让 LLM 感受到真实痛点（#12 P4）
+function giveUpSamples(projectPath: string, limit = 2): string[] {
+  const since = windowSince()
+  return (db.prepare(`
+    SELECT sig.snippet FROM signals sig JOIN sessions s ON s.id = sig.session_id
+    WHERE s.project_path = ? AND sig.kind = 'frustration' AND sig.rule = 'give-up'
+      AND sig.snippet IS NOT NULL AND sig.ts >= ?
+    ORDER BY sig.ts DESC LIMIT ?
+  `).all(projectPath, since, limit) as { snippet: string }[]).map((x) => x.snippet)
+}
+
+// 项目已否决/已采纳的规则内容——进 prompt 作语义排除清单，挡住 LLM 换措辞重述同一主题（#12 P0）
+function excludedRuleContents(projectPath: string): string[] {
+  return (db.prepare(
+    `SELECT content FROM suggestions WHERE project_path = ? AND kind = 'guard_rule' AND status IN ('adopted', 'dismissed')`
+  ).all(projectPath) as { content: string }[]).map((x) => x.content)
+}
+
+function buildPrompt(projectPath: string, signals: ReturnType<typeof topCorrectionSignals>, giveUps: string[], excluded: string[]): string {
   const lines = signals.map((s) =>
-    `- 「${RULE_LABEL[s.rule] ?? s.rule}」出现 ${s.n} 次，样本：${s.samples.map((x) => `“${x}”`).join('；')}`
+    `- 「${RULE_LABEL[s.rule] ?? s.rule}」出现 ${s.n} 次，样本：${s.samples.map((x) =>
+      x.prev ? `“${x.snippet}”（此前 agent：“${x.prev}”）` : `“${x.snippet}”`).join('；')}`
   ).join('\n')
+  const giveUpSection = giveUps.length
+    ? `\n\n痛点佐证（用户挫折表达，仅供感受严重程度，不要为其单独生成规则）：${giveUps.map((x) => `“${x}”`).join('；')}`
+    : ''
+  const excludeSection = excluded.length
+    ? `\n\n以下规则已被用户否决或采纳，不要生成与它们语义重复的规则：${excluded.map((x) => `“${x}”`).join('；')}`
+    : ''
   return `你在分析一个开发者与 coding agent 协作的历史信号。项目 ${projectPath} 中，用户纠正 agent 的高频模式如下：
 
-${lines}
+${lines}${giveUpSection}${excludeSection}
 
 请总结 1-3 条应该写进该项目 AGENTS.md 的防呆规则。要求：中文、每条一句话、具体可执行（针对上述真实纠正模式，不要泛泛的"认真一点"）。
 只输出 JSON 字符串数组，不要任何其他内容：["规则1", "规则2"]`
@@ -106,7 +155,7 @@ ${lines}
 export async function generateGuardRules(projectPath: string, llm: LlmFn = defaultLlm): Promise<string[]> {
   const signals = topCorrectionSignals(projectPath)
   if (!signals.length) return []
-  const out = await llm(dominantAgent(projectPath), buildPrompt(projectPath, signals))
+  const out = await llm(dominantAgent(projectPath), buildPrompt(projectPath, signals, giveUpSamples(projectPath), excludedRuleContents(projectPath)))
   const rules = parseRulesJson(out)
   if (!rules.length) return []
 
@@ -114,11 +163,12 @@ export async function generateGuardRules(projectPath: string, llm: LlmFn = defau
   const insert = db.prepare(
     `INSERT INTO suggestions (project_path, kind, content, evidence, status, created_at) VALUES (?, 'guard_rule', ?, ?, 'pending', ?)`
   )
-  const dup = db.prepare(`SELECT 1 FROM suggestions WHERE project_path = ? AND content = ? AND status = 'pending' LIMIT 1`)
+  // 去重闭环：dismissed（用户否掉）和 adopted（已写进 AGENTS.md）都不再重复生成（#12 P0）
+  const dup = db.prepare(`SELECT 1 FROM suggestions WHERE project_path = ? AND content = ? AND status IN ('pending', 'dismissed', 'adopted') LIMIT 1`)
   const now = new Date().toISOString()
   const added: string[] = []
   for (const rule of rules) {
-    if (dup.get(projectPath, rule)) continue // 与现有 pending 去重
+    if (dup.get(projectPath, rule)) continue // 与已有记录（含 dismissed/adopted）去重
     insert.run(projectPath, rule, evidence, now)
     added.push(rule)
   }

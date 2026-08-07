@@ -166,3 +166,86 @@ describe('建议 API', () => {
     expect(body.suggestions.filter((s: any) => s.status === 'pending').every((s: any) => s.id !== row.id)).toBe(true)
   })
 })
+
+describe('信号 90 天滚动窗（#12 P1）', () => {
+  it('只有 90 天前旧信号的项目不生成规则', async () => {
+    const oldDir = mkdtempSync(join(tmpdir(), 'spect-old-'))
+    const pk = dbmod.saveSessionMeta('pi', { sessionId: 'old-1', projectPath: oldDir, startedAt: daysAgo(100), title: 'Old', model: 'gpt-5.5' })
+    for (let i = 0; i < 5; i++) {
+      dbmod.appendMessage(pk, i + 1, { role: 'user', ts: daysAgo(100), blocks: [{ type: 'text', text: '不对，全都重来' }] })
+    }
+    let called = false
+    const rules = await harness.generateGuardRules(oldDir, async () => { called = true; return '["x规则xx"]' })
+    expect(rules).toEqual([])
+    expect(called).toBe(false) // 窗口内无信号 → 不调 LLM
+  })
+
+  it('旧高频信号不再霸榜：窗口内低频新模式排第一', async () => {
+    const mixDir = mkdtempSync(join(tmpdir(), 'spect-mix-'))
+    const pkOld = dbmod.saveSessionMeta('pi', { sessionId: 'mix-old', projectPath: mixDir, startedAt: daysAgo(120), title: 'O', model: 'gpt-5.5' })
+    for (let i = 0; i < 6; i++) {
+      dbmod.appendMessage(pkOld, i + 1, { role: 'user', ts: daysAgo(120), blocks: [{ type: 'text', text: '谁让你动这个配置的' }] })
+    }
+    const pkNew = dbmod.saveSessionMeta('pi', { sessionId: 'mix-new', projectPath: mixDir, startedAt: daysAgo(10), title: 'N', model: 'gpt-5.5' })
+    for (let i = 0; i < 2; i++) {
+      dbmod.appendMessage(pkNew, i + 1, { role: 'user', ts: daysAgo(10), blocks: [{ type: 'text', text: '重来，方向不对' }] })
+    }
+    let prompt = ''
+    await harness.generateGuardRules(mixDir, async (_a, p) => { prompt = p; return '["改动配置前先确认范围"]' })
+    expect(prompt).toContain('出现 2 次')
+    expect(prompt).not.toContain('出现 6 次') // 120 天前的 6 次不计入
+  })
+})
+
+describe('去重闭环（#12 P0）', () => {
+  it('dismissed / adopted 的规则不再重复生成', async () => {
+    // 前面的测试已在 projDir 留下 1 条 adopted + 1 条 dismissed
+    const fakeLlm = async () => '["动手前先复述用户需求再改代码", "修改前确认目标文件路径", "新的第三条规则"]'
+    const added = await harness.generateGuardRules(projDir, fakeLlm)
+    expect(added).toEqual(['新的第三条规则']) // 只有真正新的才进来
+    const rows = dbmod.db.prepare(`SELECT content, status FROM suggestions WHERE project_path = ? ORDER BY id`).all(projDir) as any[]
+    expect(rows.length).toBe(3)
+    expect(rows.filter((r) => r.content === '动手前先复述用户需求再改代码').length).toBe(1)
+    expect(rows.filter((r) => r.content === '修改前确认目标文件路径').length).toBe(1)
+  })
+})
+
+describe('证据升级：上文 assistant 摘要（#12 P2）', () => {
+  it('prompt 包含信号前一条 assistant 动作摘要', async () => {
+    const ctxDir = mkdtempSync(join(tmpdir(), 'spect-ctx-'))
+    const pk = dbmod.saveSessionMeta('pi', { sessionId: 'ctx-1', projectPath: ctxDir, startedAt: daysAgo(3), title: 'C', model: 'gpt-5.5' })
+    dbmod.appendMessage(pk, 1, { role: 'user', ts: daysAgo(3), blocks: [{ type: 'text', text: '帮我调整一下 README 的措辞' }] })
+    dbmod.appendMessage(pk, 2, { role: 'assistant', ts: daysAgo(3), blocks: [{ type: 'text', text: '好的，我直接把 README 整篇重写并换了结构' }] })
+    dbmod.appendMessage(pk, 3, { role: 'user', ts: daysAgo(3), blocks: [{ type: 'text', text: '谁让你整篇重写的，只要改措辞' }] })
+    let prompt = ''
+    await harness.generateGuardRules(ctxDir, async (_a, p) => { prompt = p; return '["只改用户指定的部分，不擅自扩大改动范围"]' })
+    expect(prompt).toContain('谁让你整篇重写')
+    expect(prompt).toContain('我直接把 README 整篇重写') // agent 前文动作进 prompt
+  })
+})
+
+describe('frustration 痛点佐证（#12 P4）', () => {
+  it('prompt 附 give-up 样本作佐证，但不进频次排序', async () => {
+    const fuDir = mkdtempSync(join(tmpdir(), 'spect-fu-'))
+    const pk = dbmod.saveSessionMeta('pi', { sessionId: 'fu-1', projectPath: fuDir, startedAt: daysAgo(4), title: 'F', model: 'gpt-5.5' })
+    dbmod.appendMessage(pk, 1, { role: 'user', ts: daysAgo(4), blocks: [{ type: 'text', text: '不对，接口参数传错了' }] })
+    dbmod.appendMessage(pk, 2, { role: 'user', ts: daysAgo(4), blocks: [{ type: 'text', text: '算了，我自己改吧，当我没说' }] })
+    let prompt = ''
+    await harness.generateGuardRules(fuDir, async (_a, p) => { prompt = p; return '["改接口前先核对参数定义"]' })
+    expect(prompt).toContain('佐证')
+    expect(prompt).toContain('我自己改吧')
+    // give-up 是 frustration 不是 correction，不计入「出现 N 次」
+    expect(prompt).not.toContain('放弃/算了」出现')
+  })
+})
+
+describe('去重闭环：prompt 排除清单（#12 P0 review 补强）', () => {
+  it('dismissed/adopted 内容进 prompt 作语义排除清单', async () => {
+    let prompt = ''
+    await harness.generateGuardRules(projDir, async (_a, p) => { prompt = p; return '["又一条新规则"]' })
+    // projDir 已有 adopted「动手前先复述用户需求再改代码」+ dismissed「修改前确认目标文件路径」
+    expect(prompt).toContain('动手前先复述用户需求再改代码')
+    expect(prompt).toContain('修改前确认目标文件路径')
+    expect(prompt).toMatch(/不要.*(重复|语义)/)
+  })
+})
