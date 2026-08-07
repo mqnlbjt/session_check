@@ -14,11 +14,11 @@
 
 ## Acceptance criteria
 
-- [ ] dismissed/adopted 的规则主题不再重复出现在新一批 pending 中
-- [ ] 90 天前的旧信号不参与计数排序
-- [ ] 生成 prompt 中包含匹配点上下文 snippet + 前一条 assistant 摘要
-- [ ] 第一人称纠正与 subagent 任务书模板不再被采集为信号
-- [ ] 现有 harness/signals 测试全绿，新增用例覆盖上述行为
+- [x] dismissed/adopted 的规则主题不再重复出现在新一批 pending 中
+- [x] 90 天前的旧信号不参与计数排序
+- [x] 生成 prompt 中包含匹配点上下文 snippet + 前一条 assistant 摘要
+- [x] 第一人称纠正与 subagent 任务书模板不再被采集为信号
+- [x] 现有 harness/signals 测试全绿，新增用例覆盖上述行为
 
 ## Blocked by
 
