@@ -88,7 +88,7 @@ describe('信号误报治理（#12 P3）', () => {
 
   it('subagent 任务书模板（你是…专家）不触发', async () => {
     const { scanSignals } = await import('../src/signal-rules.js')
-    const task = '你是资深 后端服务专家，请审查以下代码，把不对的地方指出来并修复'
+    const task = '你是资深后端服务专家，请审查以下代码，把不对的地方指出来并修复'
     expect(scanSignals(task)).toEqual([])
   })
 })
