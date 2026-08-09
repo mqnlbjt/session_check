@@ -5,6 +5,7 @@ import { db } from './db.js'
 import { ROOT_CAUSES } from './root-causes.js'
 import { classifyRootCauses } from './root-causes.js'
 import { verifyProject } from './static-checks.js'
+import { ineffectiveCategories } from './effectiveness.js'
 import { defaultLlm, type LlmFn } from './harness.js'
 import { join } from 'node:path'
 
@@ -43,8 +44,8 @@ const HOOK_TEMPLATES: Record<string, string> = {
 
 export interface AssembleDeps { searchSkills?: SearchSkillsFn; llm?: LlmFn }
 
-// 已存在（pending/dismissed）的推荐类别——去重闭环：dismissed 不回来
-function existingCategories(projectPath: string): Set<string> {
+// 已存在（pending/dismissed）的推荐类别 + 未生效类别——排除集：dismissed 不回来，未生效不推荐同类
+function excludedCategories(projectPath: string): Set<string> {
   const rows = db.prepare(
     `SELECT evidence FROM suggestions WHERE project_path = ? AND kind = 'recommendation' AND status IN ('pending', 'dismissed')`
   ).all(projectPath) as { evidence: string }[]
@@ -52,6 +53,7 @@ function existingCategories(projectPath: string): Set<string> {
   for (const r of rows) {
     try { set.add(JSON.parse(r.evidence).category) } catch { /* 跳过 */ }
   }
+  for (const c of ineffectiveCategories(projectPath)) set.add(c)
   return set
 }
 
@@ -64,7 +66,7 @@ export async function assembleRecommendations(
   await classifyRootCauses(projectPath, deps.llm ?? defaultLlm)
   const { results } = verifyProject(projectPath)
 
-  const existing = existingCategories(projectPath)
+  const existing = excludedCategories(projectPath)
   const insert = db.prepare(
     `INSERT INTO suggestions (project_path, kind, content, evidence, status, created_at) VALUES (?, 'recommendation', ?, ?, 'pending', ?)`
   )

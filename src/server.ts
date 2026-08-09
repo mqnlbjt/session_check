@@ -206,6 +206,12 @@ app.get('/api/harness/installations', (c) => {
   ).all())
 })
 
+// 验证闭环（#18）：采纳前后对比 + 三态 + 固定归因声明
+app.get('/api/harness/effectiveness', async (c) => {
+  const { evaluateAll } = await import('./effectiveness.js')
+  return c.json(evaluateAll())
+})
+
 app.post('/api/harness/installations/:id/uninstall', async (c) => {
   try {
     const { uninstall } = await import('./install.js')

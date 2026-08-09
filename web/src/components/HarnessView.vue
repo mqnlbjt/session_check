@@ -55,7 +55,19 @@ interface Installation {
   target_path: string; status: 'active' | 'uninstalled'
   installed_at: string; uninstalled_at: string | null
 }
+interface EffectReport {
+  id: number; artifact: string; category: string | null
+  status: 'effective' | 'ineffective' | 'observing' | 'uninstalled'
+  baseline_per_week: number; post_per_week: number; signals_after: number; days: number
+  disclaimer: string
+}
 const installations = ref<Installation[]>([])
+const effects = ref<Map<number, EffectReport>>(new Map())
+const EFFECT_LABEL: Record<EffectReport['status'], string> = {
+  effective: '生效中', ineffective: '未生效', observing: '观察中', uninstalled: '已卸载',
+}
+// 固定归因声明（与后端 EFFECT_DISCLAIMER 同文，展示在每张判决卡片上）
+const EFFECT_DISCLAIMER = '信号下降 ≠ 推荐生效（可能是项目收尾）——仅供参考，不做判决'
 const pendingWrites = ref<PendingWrite[]>([])
 const modelAdvice = ref<ModelAdvice[]>([])
 const taskAdvice = ref<{ task: string; content: string; evidence: string }[]>([])
@@ -89,6 +101,8 @@ async function load() {
     taskMatrix.value = await fetch('/api/analytics/task-models?window=30').then((r) => r.json()).catch(() => [])
     pendingWrites.value = await fetch('/api/pending-writes').then((r) => r.json()).catch(() => [])
     installations.value = await fetch('/api/harness/installations').then((r) => r.json()).catch(() => [])
+    const effRows: EffectReport[] = await fetch('/api/harness/effectiveness').then((r) => r.json()).catch(() => [])
+    effects.value = new Map(effRows.map((e) => [e.id, e]))
   } finally {
     loading.value = false
   }
@@ -418,18 +432,25 @@ function shortPath(p: string) {
         <!-- 底部不再单独放重新生成入口（已并入顶部生成面板） -->
       </section>
 
-      <!-- 已采纳历史（#17 installations：skill/hook/AGENTS.md 统一，一键撤销） -->
+      <!-- 已采纳历史（#17 installations：skill/hook/AGENTS.md 统一，一键撤销；#18 效果追踪） -->
       <section v-if="installations.length" class="card">
         <h3 class="c-title mono">已采纳历史 · {{ installations.length }}</h3>
         <div v-for="x in installations" :key="x.id" class="done-item" :class="{ dim: x.status === 'uninstalled' }">
           <span class="done-text">
             <span class="mono" style="font-size:10px;color:var(--dim)">[{{ x.route }}]</span>
             {{ x.artifact }}
-            <span v-if="x.status === 'uninstalled'" class="mono" style="font-size:10px;color:var(--dim)">（已撤销）</span>
+            <span v-if="effects.get(x.id)" class="eff-badge mono" :class="effects.get(x.id)!.status">
+              {{ EFFECT_LABEL[effects.get(x.id)!.status] }}
+              · {{ effects.get(x.id)!.baseline_per_week }}/周 → {{ effects.get(x.id)!.post_per_week }}/周
+            </span>
+            <div v-if="effects.get(x.id) && ['effective', 'ineffective'].includes(effects.get(x.id)!.status)" class="eff-disclaimer">
+              {{ EFFECT_DISCLAIMER }}
+            </div>
           </span>
           <span class="done-path mono">→ {{ x.target_path }} · {{ x.installed_at.slice(0, 10) }}{{ x.version ? ` · v${x.version}` : '' }}</span>
           <button v-if="x.status === 'active'" class="btn dismiss" @click="uninstallInst(x)">撤销</button>
         </div>
+        <div class="hint" style="padding:8px 0 0;text-align:left">{{ EFFECT_DISCLAIMER }}</div>
       </section>
 
       <!-- 已忽略（折叠） -->
@@ -480,6 +501,12 @@ function shortPath(p: string) {
 .ev-status.present { color: var(--green, #7bc47f); }
 .ev-snippet, .ev-detail { color: var(--fg); opacity: 0.85; }
 .ev-rule { font-size: 10px; color: var(--dim); flex-shrink: 0; }
+.eff-badge { font-size: 10px; margin-left: 8px; padding: 1px 6px; border-radius: 4px; }
+.eff-badge.effective { color: var(--green, #7bc47f); background: rgba(123, 196, 127, 0.1); }
+.eff-badge.ineffective { color: var(--red, #e06c75); background: rgba(224, 108, 117, 0.1); }
+.eff-badge.observing { color: var(--amber); background: rgba(232, 163, 61, 0.1); }
+.eff-badge.uninstalled { color: var(--dim); }
+.eff-disclaimer { font-size: 10px; color: var(--dim); margin-top: 2px; }
 .ev-terms { font-size: 11px; color: var(--dim); }
 .ev-candidate { color: var(--fg); }
 .toggle:hover { color: var(--amber); }
