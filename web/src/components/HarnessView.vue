@@ -60,12 +60,18 @@ const showDismissed = ref(false)
 const feedback = ref('')
 
 const pending = computed(() => suggestions.value.filter((s) => s.status === 'pending'))
+// 改进清单（#16）：recommendation 类建议与防呆规则分开渲染
+const pendingRecs = computed(() => pending.value.filter((s) => s.kind === 'recommendation'))
+const pendingGuard = computed(() => pending.value.filter((s) => s.kind !== 'recommendation'))
 const pendingWritesActive = computed(() => pendingWrites.value.filter((w) => w.status === 'pending'))
 const adopted = computed(() => suggestions.value.filter((s) => s.status === 'adopted'))
 const dismissed = computed(() => suggestions.value.filter((s) => s.status === 'dismissed'))
 
 // 有待处理建议的项目 + 有信号但还没建议的项目（可以生成）
-const pendingProjects = computed(() => [...new Set(pending.value.map((s) => s.project_path))])
+const pendingProjects = computed(() => [...new Set(pendingGuard.value.map((s) => s.project_path))])
+
+// 待诊断弱提示（#16）：已确认但未诊断根因的信号，按项目聚合
+const undiagnosed = computed(() => candidates.value.filter((c: any) => c.confirmed_undiagnosed > 0))
 
 async function load() {
   try {
@@ -117,6 +123,59 @@ async function generate(projectPath: string) {
   }
 }
 onUnmounted(() => { for (const t of polls) clearTimeout(t); polls.clear() })
+
+// 推荐物组装（#16）：分类→静态确认→搜索→推荐卡片；同样后台异步轮询
+const assemblingFor = ref<string | null>(null)
+async function assemble(projectPath: string) {
+  assemblingFor.value = projectPath
+  feedback.value = ''
+  const before = new Set(suggestions.value.map((s) => s.id))
+  try {
+    const res = await fetch('/api/harness/assemble', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_path: projectPath }),
+    })
+    if (!res.ok) throw new Error((await res.json()).error ?? `HTTP ${res.status}`)
+    const deadline = Date.now() + 5 * 60_000
+    const tick = async () => {
+      await load()
+      const hasNew = suggestions.value.some((s) => !before.has(s.id) && s.project_path === projectPath && s.kind === 'recommendation')
+      if (hasNew) { assemblingFor.value = null; feedback.value = '改进建议已生成'; return }
+      if (Date.now() < deadline) {
+        const t = setTimeout(() => { polls.delete(t); tick() }, 4000)
+        polls.add(t)
+      } else { assemblingFor.value = null; feedback.value = '生成超时或无新推荐（可能已有防护或与已有推荐重复）' }
+    }
+    const t0 = setTimeout(() => { polls.delete(t0); tick() }, 4000)
+    polls.add(t0)
+  } catch (e: any) {
+    assemblingFor.value = null
+    feedback.value = `生成失败：${e?.message ?? '未知错误'}`
+  }
+}
+
+interface RecEvidence {
+  category: string; category_label: string; route: string
+  signals: { rule: string; snippet: string; confirmation: string }[]
+  checks: { kind: string; desc: string; status: string; detail: string }[]
+  search_terms: string[]
+  candidate: { name: string; installs: number; url: string; description: string } | null
+  hook_draft: string | null; mcp_hint: string | null
+}
+function parseRecEvidence(e: string | null): RecEvidence | null {
+  if (!e) return null
+  try { const d = JSON.parse(e); return d.category ? d : null } catch { return null }
+}
+// 预解析一次，模板不用反复 JSON.parse（review 修正）
+const recEvidenceMap = computed(() => {
+  const m = new Map<number, RecEvidence>()
+  for (const s of pendingRecs.value) {
+    const ev = parseRecEvidence(s.evidence)
+    if (ev) m.set(s.id, ev)
+  }
+  return m
+})
 
 async function adopt(s: Suggestion) {
   const res = await fetch(`/api/harness/suggestions/${s.id}/adopt`, { method: 'POST' })
@@ -184,6 +243,55 @@ function shortPath(p: string) {
           <div class="w-actions">
             <button class="btn adopt" @click="confirmWrite(w)">确认写入</button>
             <button class="btn dismiss" @click="discardWrite(w)">放弃</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 改进清单（#16）：待诊断信号 → 推荐卡片（会清空的清单，不是 feed） -->
+      <section class="card">
+        <h3 class="c-title mono">改进清单 · skills / hooks / MCP 推荐</h3>
+
+        <!-- 待诊断弱提示：项目名 + 信号数，够具体才不会被遗忘 -->
+        <div v-if="undiagnosed.length" class="undiagnosed">
+          <div v-for="c in undiagnosed" :key="c.project_path" class="und-row">
+            <span class="und-text" :title="c.project_path">{{ shortPath(c.project_path) }} 有 {{ c.confirmed_undiagnosed }} 条已确认信号待诊断</span>
+            <button class="btn gen mono" :disabled="assemblingFor === c.project_path" @click="assemble(c.project_path)">
+              {{ assemblingFor === c.project_path ? '诊断中…' : '生成建议' }}
+            </button>
+          </div>
+        </div>
+        <div v-else-if="!pendingRecs.length" class="hint">没有待诊断的信号，清单已清空——harness 状态良好。</div>
+
+        <!-- 推荐卡片：根因 + 证据链可展开 + 预览/忽略 -->
+        <div v-for="s in pendingRecs" :key="s.id" class="rec-card">
+          <div class="s-content">{{ s.content }}</div>
+          <details v-if="recEvidenceMap.get(s.id)" class="rec-evidence">
+            <summary class="mono">证据链 / 预览</summary>
+            <div class="ev-block">
+              <div class="ev-label mono">信号（{{ recEvidenceMap.get(s.id)!.signals.length }}）</div>
+              <div v-for="(sig, i) in recEvidenceMap.get(s.id)!.signals" :key="i" class="ev-signal">
+                <span class="ev-conf mono" :class="sig.confirmation">{{ sig.confirmation }}</span>
+                <span class="ev-rule mono">{{ sig.rule }}</span>
+                <span class="ev-snippet">{{ sig.snippet }}</span>
+              </div>
+            </div>
+            <div class="ev-block">
+              <div class="ev-label mono">静态确认检查</div>
+              <div v-for="(chk, i) in recEvidenceMap.get(s.id)!.checks" :key="i" class="ev-check">
+                <span class="ev-status mono" :class="chk.status">{{ chk.status === 'missing' ? '✗ 缺失' : chk.status === 'present' ? '✓ 已有' : '? 未知' }}</span>
+                <span class="ev-detail">{{ chk.desc }}：{{ chk.detail }}</span>
+              </div>
+            </div>
+            <div class="ev-block mono ev-terms">搜索词：{{ recEvidenceMap.get(s.id)!.search_terms.join(' / ') }}</div>
+            <div v-if="recEvidenceMap.get(s.id)!.candidate" class="ev-block ev-candidate">
+              推荐物：<a v-if="recEvidenceMap.get(s.id)!.candidate!.url" :href="recEvidenceMap.get(s.id)!.candidate!.url" target="_blank" rel="noopener">{{ recEvidenceMap.get(s.id)!.candidate!.name }}</a><template v-else>{{ recEvidenceMap.get(s.id)!.candidate!.name }}</template>
+              <span v-if="recEvidenceMap.get(s.id)!.candidate!.installs">（{{ (recEvidenceMap.get(s.id)!.candidate!.installs / 10000).toFixed(1) }}万 安装）</span>
+            </div>
+            <pre v-if="recEvidenceMap.get(s.id)!.hook_draft" class="w-content">{{ recEvidenceMap.get(s.id)!.hook_draft }}</pre>
+            <div v-if="recEvidenceMap.get(s.id)!.mcp_hint" class="ev-block">{{ recEvidenceMap.get(s.id)!.mcp_hint }}</div>
+          </details>
+          <div class="s-meta mono">
+            <button class="btn dismiss" @click="dismiss(s)">忽略</button>
           </div>
         </div>
       </section>
@@ -265,11 +373,11 @@ function shortPath(p: string) {
           >{{ generatingFor === cand.project_path ? '生成中…' : `${shortPath(cand.project_path)} ↺${cand.corrections}` }}</button>
         </div>
 
-        <div v-if="!pending.length" class="hint">暂无待处理建议。点上方项目按钮，用该项目的纠正信号生成防呆规则。</div>
+        <div v-if="!pendingGuard.length" class="hint">暂无待处理建议。点上方项目按钮，用该项目的纠正信号生成防呆规则。</div>
 
         <div v-for="proj in pendingProjects" :key="proj" class="proj-group">
           <div class="proj-head mono">{{ shortPath(proj) }}</div>
-          <div v-for="s in pending.filter((x) => x.project_path === proj)" :key="s.id" class="suggestion">
+          <div v-for="s in pendingGuard.filter((x) => x.project_path === proj)" :key="s.id" class="suggestion">
             <div class="s-content">{{ s.content }}</div>
             <div class="s-meta mono">
               <span class="s-evidence">依据：{{ evidenceText(s.evidence) }}</span>
@@ -317,6 +425,30 @@ function shortPath(p: string) {
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
 .c-title { font-size: 11px; color: var(--dim); letter-spacing: 0.1em; margin-bottom: 12px; font-weight: 500; }
 .toggle { background: none; border: none; cursor: pointer; padding: 0; }
+
+/* 改进清单（#16） */
+.undiagnosed { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.und-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 12px; background: rgba(232, 163, 61, 0.06); border: 1px dashed rgba(232, 163, 61, 0.35); border-radius: 6px;
+}
+.und-text { font-size: 12px; color: var(--amber); }
+.rec-card { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; }
+.rec-evidence { margin-top: 8px; }
+.rec-evidence summary { cursor: pointer; font-size: 11px; color: var(--dim); }
+.ev-block { margin-top: 8px; font-size: 12px; }
+.ev-label { font-size: 10px; color: var(--dim); letter-spacing: 0.08em; margin-bottom: 4px; }
+.ev-signal, .ev-check { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; }
+.ev-conf { font-size: 10px; flex-shrink: 0; }
+.ev-conf.confirmed { color: var(--green, #7bc47f); }
+.ev-conf.unconfirmed { color: var(--amber); }
+.ev-status { font-size: 10px; flex-shrink: 0; }
+.ev-status.missing { color: var(--red, #e06c75); }
+.ev-status.present { color: var(--green, #7bc47f); }
+.ev-snippet, .ev-detail { color: var(--fg); opacity: 0.85; }
+.ev-rule { font-size: 10px; color: var(--dim); flex-shrink: 0; }
+.ev-terms { font-size: 11px; color: var(--dim); }
+.ev-candidate { color: var(--fg); }
 .toggle:hover { color: var(--amber); }
 
 .advice { display: flex; gap: 10px; padding: 10px 4px 6px; font-size: 13px; }

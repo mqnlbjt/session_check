@@ -177,6 +177,19 @@ app.get('/api/harness/verifications', (c) => {
   return c.json(rows)
 })
 
+const assembling = new Set<string>()
+app.post('/api/harness/assemble', async (c) => {
+  const { project_path } = await c.req.json().catch(() => ({ project_path: null }))
+  if (!project_path) return c.json({ error: 'project_path 必填' }, 400)
+  if (assembling.has(project_path)) return c.json({ error: '该项目正在生成建议中' }, 409)
+  assembling.add(project_path)
+  import('./recommend.js')
+    .then((m) => m.assembleRecommendations(project_path))
+    .catch((e) => console.error('[harness] 推荐组装失败:', e))
+    .finally(() => assembling.delete(project_path))
+  return c.json({ status: 'started', project_path })
+})
+
 app.post('/api/harness/suggestions/:id/adopt', (c) => {
   try {
     const r = adoptSuggestion(Number(c.req.param('id')))

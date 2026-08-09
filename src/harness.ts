@@ -249,8 +249,11 @@ export async function listSuggestions() {
     `SELECT * FROM suggestions ORDER BY CASE status WHEN 'pending' THEN 0 WHEN 'adopted' THEN 1 ELSE 2 END, created_at DESC`
   ).all()
   // 生成入口候选：有纠正信号的项目（前端「生成建议」按钮列表）
+  // confirmed_undiagnosed：已确认但未分类根因的信号数（#16 弱提示「有 N 条信号待诊断」）
   const candidates = db.prepare(`
-    SELECT s.project_path, COUNT(*) corrections FROM signals sig
+    SELECT s.project_path, COUNT(*) corrections,
+      SUM(CASE WHEN sig.confirmation = 'confirmed' AND sig.root_cause IS NULL THEN 1 ELSE 0 END) confirmed_undiagnosed
+    FROM signals sig
     JOIN sessions s ON s.id = sig.session_id
     WHERE sig.kind = 'correction' AND s.project_path IS NOT NULL
     GROUP BY s.project_path ORDER BY corrections DESC LIMIT 10
