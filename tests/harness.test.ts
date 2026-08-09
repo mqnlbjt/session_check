@@ -249,3 +249,25 @@ describe('去重闭环：prompt 排除清单（#12 P0 review 补强）', () => {
     expect(prompt).toMatch(/不要.*(重复|语义)/)
   })
 })
+
+describe('JSON 提取抗噪音（冒烟发现的 bug 回归）', () => {
+  it('pi --print 输出混有 [info] 方括号行时仍能提取规则数组', () => {
+    const noisy = `[info]: [ '[ws]', 'ws client ready' ]
+分析过程……
+["规则一：先确认再改", "规则二：改完跑测试"]
+[info]: [ '[ws]', 'ws client closed manually (force)' ]`
+    expect(harness.parseRulesJson(noisy)).toEqual(['规则一：先确认再改', '规则二：改完跑测试'])
+  })
+})
+
+describe('分类解析抗噪音（同一 bug）', () => {
+  it('输出混有噪音行时仍能提取分类数组', async () => {
+    const { parseClassification } = await import('../src/root-causes.js')
+    const noisy = `[info]: [ '[ws]', 'ready' ]
+[{"id": 1, "category": "overreach", "confidence": 0.9}]
+[info]: [ 'x' ]`
+    const r = parseClassification(noisy)
+    expect(r.length).toBe(1)
+    expect(r[0].category).toBe('overreach')
+  })
+})

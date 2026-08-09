@@ -1,7 +1,7 @@
 // 根因分类体系（#14）：封闭枚举 + LLM 选择题分类器
 // 每个类别绑定三件资产：①验证检查项（#15 静态确认）②skills 搜索词（#16 推荐物搜索）③推荐物类型路由
 import { db } from './db.js'
-import { defaultLlm, dominantAgent, type LlmFn } from './harness.js'
+import { defaultLlm, dominantAgent, extractJsonArray, type LlmFn } from './harness.js'
 
 export interface RootCause {
   id: string
@@ -100,6 +100,7 @@ function buildPrompt(projectPath: string, signals: Unclassified[]): string {
   const cats = ROOT_CAUSES.map((c) => `- ${c.id}（${c.label}）：${c.description}`).join('\n')
   const sigs = signals.map((s) => `- id=${s.id} 「${s.rule}」：${s.snippet ?? ''}`).join('\n')
   return `你在对 coding agent 被用户纠正的信号做根因分类。项目 ${projectPath}。
+你没有任何工具可用——禁止探查项目文件，只根据下面给出的信号文本判断。
 
 根因类别（封闭枚举，只能选这些 id）：
 ${cats}
@@ -107,26 +108,22 @@ ${cats}
 待分类信号：
 ${sigs}
 
-对每条信号判断根因类别。只输出 JSON 数组，不要任何其他内容：
+对每条信号判断根因类别。只输出 JSON 数组，不要调用工具、不要输出任何其他内容：
 [{"id": 信号id, "category": "类别id", "confidence": 0.0-1.0}]`
 }
 
-// 从输出提取分类数组（容错：第一个 [ 到最后一个 ]；非法类别归 other）
+// 从输出提取分类数组（容错抗噪音：复用 extractJsonArray；非法类别归 other）
 export function parseClassification(text: string, validIds: Set<string> = VALID_IDS): { id: number; category: string; confidence: number }[] {
-  const start = text.indexOf('[')
-  const end = text.lastIndexOf(']')
-  if (start < 0 || end <= start) return []
-  try {
-    const arr = JSON.parse(text.slice(start, end + 1))
-    if (!Array.isArray(arr)) return []
-    return arr
-      .filter((x) => x && typeof x.id === 'number' && typeof x.category === 'string')
-      .map((x) => ({
-        id: x.id,
-        category: validIds.has(x.category) ? x.category : 'other',
-        confidence: Math.max(0, Math.min(1, Number(x.confidence) || 0)),
-      }))
-  } catch { return [] }
+  const arr = extractJsonArray(text)
+  if (!arr) return []
+  return arr
+    .filter((x): x is { id: number; category: string; confidence?: unknown } =>
+      typeof x === 'object' && x !== null && typeof (x as any).id === 'number' && typeof (x as any).category === 'string')
+    .map((x) => ({
+      id: x.id,
+      category: validIds.has(x.category) ? x.category : 'other',
+      confidence: Math.max(0, Math.min(1, Number(x.confidence) || 0)),
+    }))
 }
 
 // 手动触发的根因分类：已确认信号 → LLM 选择题 → 落库（幂等：只送未分类的）

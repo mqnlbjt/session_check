@@ -14,7 +14,8 @@ import type { AgentType } from './model.js'
 export type LlmFn = (agent: AgentType, prompt: string) => Promise<string>
 
 const CLI_ARGS: Record<AgentType, (prompt: string) => string[]> = {
-  pi: (p) => ['--print', '--no-session', '--no-tools', p],
+  // --no-extensions：headless 调用不加载扩展（mcp ws 客户端连不上时会挂住进程不退出）
+  pi: (p) => ['--print', '--no-session', '--no-tools', '--no-extensions', p],
   claude: (p) => ['-p', p],
   codex: (p) => ['exec', p],
 }
@@ -38,8 +39,8 @@ export const defaultLlm: LlmFn = (agent, prompt) =>
     const timer = setTimeout(() => done(() => reject(new Error(`${agent} 生成超时（3 分钟）`))), 180_000)
     child.stdout.on('data', (d) => {
       out += d
-      // 流式验收：出现完整 JSON 数组就收工
-      if (parseRulesJson(out).length) done(() => resolve(out))
+      // 流式验收：出现完整 JSON 数组就收工（用通用提取器——分类输出是对象数组，parseRulesJson 只认字符串数组会永远等不到）
+      if (extractJsonArray(out)) done(() => resolve(out))
     })
     child.stderr.on('data', (d) => { err += d })
     child.on('error', (e) => done(() => reject(new Error(`无法启动 ${agent}: ${e.message}`))))
@@ -49,16 +50,26 @@ export const defaultLlm: LlmFn = (agent, prompt) =>
     })
   })
 
-// 从输出里提取 JSON 字符串数组（容错：从第一个 [ 到最后一个 ]，容忍规则文案里的 ])
+// 从输出中提取 JSON 数组（抗噪音：pi --print 会混 [info] 方括号行/思考文本）
+// 策略：逐「[」起点尝试递增窗口解析，返回第一个能解析为数组的；先剥掉 [info] 行
+export function extractJsonArray(text: string): unknown[] | null {
+  const clean = text.replace(/^\[info\]:.*$/gm, '')
+  for (let i = clean.indexOf('['); i >= 0 && i < clean.length; i = clean.indexOf('[', i + 1)) {
+    for (let j = clean.indexOf(']', i); j > i; j = clean.indexOf(']', j + 1)) {
+      try {
+        const v = JSON.parse(clean.slice(i, j + 1))
+        if (Array.isArray(v) && v.length) return v
+      } catch { /* 继续扩窗 */ }
+    }
+  }
+  return null
+}
+
+// 从输出里提取 JSON 字符串数组（容错：从第一个 [ 到最后一个 ]，容忍规则文案里的 ]）
 export function parseRulesJson(text: string): string[] {
-  const start = text.indexOf('[')
-  const end = text.lastIndexOf(']')
-  if (start < 0 || end <= start) return []
-  try {
-    const arr = JSON.parse(text.slice(start, end + 1))
-    if (!Array.isArray(arr)) return []
-    return arr.filter((x): x is string => typeof x === 'string' && x.trim().length > 4).slice(0, 3)
-  } catch { return [] }
+  const arr = extractJsonArray(text)
+  if (!arr) return []
+  return arr.filter((x): x is string => typeof x === 'string' && x.trim().length > 4).slice(0, 3)
 }
 
 const RULE_LABEL: Record<string, string> = {
@@ -144,7 +155,7 @@ function buildPrompt(projectPath: string, signals: ReturnType<typeof topCorrecti
   const excludeSection = excluded.length
     ? `\n\n以下规则已被用户否决或采纳，不要生成与它们语义重复的规则：${excluded.map((x) => `“${x}”`).join('；')}`
     : ''
-  return `你在分析一个开发者与 coding agent 协作的历史信号。项目 ${projectPath} 中，用户纠正 agent 的高频模式如下：
+  return `你在分析一个开发者与 coding agent 协作的历史信号。项目 ${projectPath} 中，用户纠正 agent 的高频模式如下（你没有任何工具可用——禁止探查项目文件，只根据给出的信号判断）：
 
 ${lines}${giveUpSection}${excludeSection}
 
