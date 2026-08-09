@@ -17,7 +17,10 @@ export const ROOT_CAUSES: RootCause[] = [
   {
     id: 'misunderstanding', label: '需求理解偏差',
     description: 'agent 理解错用户意图，做的不是用户要的',
-    checks: [{ kind: 'clarify-skill', desc: '需求澄清类 skill（提问对齐流程）' }],
+    checks: [
+      { kind: 'clarify-skill', desc: '需求澄清类 skill（提问对齐流程）' },
+      { kind: 'requirement-rule', desc: 'AGENTS.md 有需求确认类规则' },
+    ],
     searchTerms: ['requirement clarification', 'ask user questions'],
     route: 'skill',
   },
@@ -54,14 +57,20 @@ export const ROOT_CAUSES: RootCause[] = [
   {
     id: 'style-mismatch', label: '风格约定不符',
     description: '代码风格/提交信息/文档格式不合项目约定',
-    checks: [{ kind: 'agents-md-style', desc: 'AGENTS.md 风格约定覆盖' }],
+    checks: [
+      { kind: 'agents-md-style', desc: 'AGENTS.md 风格约定覆盖' },
+      { kind: 'lint-config', desc: 'lint/格式化配置文件' },
+    ],
     searchTerms: ['code style conventions'],
     route: 'skill',
   },
   {
     id: 'env-context', label: '环境上下文缺失',
     description: 'agent 不知道环境事实（路径/依赖/部署方式/凭据位置）',
-    checks: [{ kind: 'env-docs', desc: '环境/部署文档（CONTEXT.md、README 部署节）' }],
+    checks: [
+      { kind: 'env-docs', desc: '环境/部署文档（CONTEXT.md、README 部署节）' },
+      { kind: 'env-agents-md', desc: 'AGENTS.md 环境事实覆盖' },
+    ],
     searchTerms: ['project context', 'environment setup'],
     route: 'mcp',
   },

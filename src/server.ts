@@ -161,6 +161,22 @@ app.post('/api/harness/classify', async (c) => {
   return c.json({ status: 'started', project_path })
 })
 
+app.post('/api/harness/verify', async (c) => {
+  const { project_path } = await c.req.json().catch(() => ({ project_path: null }))
+  if (!project_path) return c.json({ error: 'project_path 必填' }, 400)
+  const { verifyProject } = await import('./static-checks.js')
+  return c.json(verifyProject(project_path))
+})
+
+// 已落库的检查结论（UI 证据链展开用，不重跑检查）
+app.get('/api/harness/verifications', (c) => {
+  const project = c.req.query('project_path')
+  const rows = project
+    ? db.prepare(`SELECT * FROM verifications WHERE project_path = ? ORDER BY created_at DESC`).all(project)
+    : db.prepare(`SELECT * FROM verifications ORDER BY created_at DESC LIMIT 100`).all()
+  return c.json(rows)
+})
+
 app.post('/api/harness/suggestions/:id/adopt', (c) => {
   try {
     const r = adoptSuggestion(Number(c.req.param('id')))

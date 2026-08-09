@@ -140,6 +140,19 @@ try { db.exec(`ALTER TABLE signals ADD COLUMN confirmation TEXT`) } catch { /* �
 try { db.exec(`ALTER TABLE signals ADD COLUMN root_cause TEXT`) } catch { /* 已存在 */ }
 try { db.exec(`ALTER TABLE signals ADD COLUMN cause_confidence REAL`) } catch { /* 已存在 */ }
 
+// #15 静态确认：类别级检查结论（upsert 语义，UNIQUE(project_path, category)）
+db.exec(`
+CREATE TABLE IF NOT EXISTS verifications (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_path TEXT NOT NULL,
+  category     TEXT NOT NULL,
+  verdict      TEXT NOT NULL,     -- confirmed-gap | already-protected | unknown
+  checks_json  TEXT NOT NULL,     -- CheckResult[]
+  created_at   TEXT NOT NULL,
+  UNIQUE(project_path, category)
+);
+`)
+
 // FTS5 全文搜索：只索引 text block + tool_call 入参（thinking / tool_result 不索引）
 // trigram 分词：中文可子串匹配，代价是查询需 ≥3 字符（短查询走 LIKE 降级）
 db.exec(`
