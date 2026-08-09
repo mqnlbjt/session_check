@@ -135,6 +135,9 @@ CREATE TABLE IF NOT EXISTS pending_writes (
 );
 `)
 
+// signals 表在上面第二个块才创建，轻量迁移必须放这里（放上面会被 catch 静默吞掉）
+try { db.exec(`ALTER TABLE signals ADD COLUMN confirmation TEXT`) } catch { /* 已存在 */ }
+
 // FTS5 全文搜索：只索引 text block + tool_call 入参（thinking / tool_result 不索引）
 // trigram 分词：中文可子串匹配，代价是查询需 ≥3 字符（短查询走 LIKE 降级）
 db.exec(`
@@ -186,8 +189,9 @@ export function backfillFts(): number {
 
 // 信号回填：全量重建（user 消息量级小，DELETE + 重扫最简单且天然幂等）
 export function backfillSignals(): number {
-  const userMsgs = db.prepare(`SELECT id, session_id, ts, blocks_json FROM messages WHERE role = 'user'`).all() as {
-    id: number; session_id: string; ts: string; blocks_json: string
+  // ORDER BY 保证同会话内按 seq 顺序重建，佐证计数（同规则已存在的判定）才稳定
+  const userMsgs = db.prepare(`SELECT id, session_id, seq, ts, blocks_json FROM messages WHERE role = 'user' ORDER BY session_id, seq`).all() as {
+    id: number; session_id: string; seq: number; ts: string; blocks_json: string
   }[]
   let n = 0
   const tx = db.transaction(() => {
@@ -197,7 +201,7 @@ export function backfillSignals(): number {
       const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n')
       if (!text.trim()) continue
       for (const h of scanSignals(text)) {
-        insertSignal.run(m.session_id, m.id, h.rule, h.kind, h.snippet, m.ts)
+        insertSignal.run(m.session_id, m.id, h.rule, h.kind, h.snippet, m.ts, classifyConfirmation(m.session_id, m.seq, h.rule))
         n++
       }
     }
@@ -312,7 +316,33 @@ export function getSessionPkByPath(path: string): string | null {
 const insertMetric = db.prepare(`INSERT INTO metrics (session_id, ts, cum_input, cum_output) VALUES (?, ?, ?, ?)`)
 const metricsStmt = db.prepare(`SELECT ts, cum_input, cum_output FROM metrics WHERE session_id = ? ORDER BY ts`)
 const insertRisk = db.prepare(`INSERT OR IGNORE INTO risks (session_id, rule, severity, snippet, ts) VALUES (?, ?, ?, ?, ?)`)
-const insertSignal = db.prepare(`INSERT OR IGNORE INTO signals (session_id, message_id, rule, kind, snippet, ts) VALUES (?, ?, ?, ?, ?, ?)`)
+const insertSignal = db.prepare(`INSERT OR IGNORE INTO signals (session_id, message_id, rule, kind, snippet, ts, confirmation) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+
+// ---- 信号确认层（#13）：纯确定性检查，ingest 与回填共用 ----
+// 实质动作：前一条 assistant 有写类工具调用（edit/write/bash 等；read/grep 等只读不算）
+// 佐证：同会话同规则已有信号。confirmed = 有动作；unconfirmed = 无动作但有佐证；likely-noise = 无动作且首发
+const ACTION_TOOL = /edit|write|bash|shell|exec|patch|apply|delete|move|rename/i
+const prevAssistantBlocks = db.prepare(`
+  SELECT blocks_json FROM messages
+  WHERE session_id = ? AND role = 'assistant' AND seq < ?
+  ORDER BY seq DESC LIMIT 1
+`)
+const sameRuleCount = db.prepare(`SELECT COUNT(*) n FROM signals WHERE session_id = ? AND rule = ?`)
+
+function classifyConfirmation(sessionId: string, seq: number, rule: string): 'confirmed' | 'unconfirmed' | 'likely-noise' {
+  const prev = prevAssistantBlocks.get(sessionId, seq) as { blocks_json: string } | undefined
+  let hasAction = false
+  if (prev) {
+    try {
+      hasAction = (JSON.parse(prev.blocks_json) as Block[]).some(
+        (b) => b.type === 'tool_call' && (!b.name || ACTION_TOOL.test(b.name)) // 无工具名时宽进
+      )
+    } catch { /* 解析失败按无动作 */ }
+  }
+  if (hasAction) return 'confirmed'
+  const corroborated = (sameRuleCount.get(sessionId, rule) as { n: number }).n > 0
+  return corroborated ? 'unconfirmed' : 'likely-noise'
+}
 
 export const insertReview = db.prepare(`
   INSERT INTO reviews (session_id, created_at, source, model, verdict, summary, findings_json)
@@ -404,7 +434,7 @@ const appendTx = db.transaction((sessionPk: string, seq: number, msg: Normalized
       const text = msg.blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n')
       if (text.trim()) {
         for (const h of scanSignals(text)) {
-          insertSignal.run(sessionPk, Number(info.lastInsertRowid), h.rule, h.kind, h.snippet, msg.ts)
+          insertSignal.run(sessionPk, Number(info.lastInsertRowid), h.rule, h.kind, h.snippet, msg.ts, classifyConfirmation(sessionPk, seq, h.rule))
         }
       }
     }

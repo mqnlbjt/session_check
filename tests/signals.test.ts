@@ -119,3 +119,76 @@ describe('第一人称排除扩展（#12 P3 review 补强）', () => {
     expect(scanSignals('我搞错了，重来一遍吧').filter((h) => h.kind === 'correction')).toEqual([])
   })
 })
+
+// ---- 期6 #13：信号确认层 ----
+describe('信号确认状态（#13）', () => {
+  beforeAll(() => {
+    const pk = dbmod.saveSessionMeta('pi', {
+      sessionId: 'conf-s1', projectPath: '/data/conf', startedAt: '2026-08-01T10:00:00Z', title: '确认层测试',
+    })
+    // 前一条 assistant 有实质动作（tool_call）→ confirmed
+    dbmod.appendMessage(pk, 1, { role: 'assistant', ts: '2026-08-01T10:00:01Z', blocks: [{ type: 'tool_call', name: 'edit', input: { path: 'a.ts' } }] })
+    dbmod.appendMessage(pk, 2, { role: 'user', ts: '2026-08-01T10:00:02Z', blocks: [{ type: 'text', text: '不对，你改错文件了' }] })
+    // 前一条 assistant 纯文本（无动作）+ 该规则本会话首发 → likely-noise
+    dbmod.appendMessage(pk, 3, { role: 'assistant', ts: '2026-08-01T10:00:03Z', blocks: [{ type: 'text', text: '我解释一下思路' }] })
+    dbmod.appendMessage(pk, 4, { role: 'user', ts: '2026-08-01T10:00:04Z', blocks: [{ type: 'text', text: '谁让你动配置的' }] })
+    // 同规则第二次出现（有佐证）但仍无动作 → unconfirmed
+    dbmod.appendMessage(pk, 5, { role: 'assistant', ts: '2026-08-01T10:00:05Z', blocks: [{ type: 'text', text: '好的' }] })
+    dbmod.appendMessage(pk, 6, { role: 'user', ts: '2026-08-01T10:00:06Z', blocks: [{ type: 'text', text: '谁让你又动配置了' }] })
+  })
+
+  const confOf = (seq: number, rule: string) =>
+    (dbmod.db.prepare(`SELECT sig.confirmation FROM signals sig JOIN messages m ON m.id = sig.message_id WHERE sig.session_id = 'pi:conf-s1' AND m.seq = ? AND sig.rule = ?`).get(seq, rule) as any)?.confirmation
+
+  it('前文有实质动作 → confirmed', () => {
+    expect(confOf(2, 'wrong')).toBe('confirmed')
+  })
+  it('前文无动作 + 首发 → likely-noise', () => {
+    expect(confOf(4, 'why-did-you')).toBe('likely-noise')
+  })
+  it('前文无动作 + 同规则有佐证 → unconfirmed', () => {
+    expect(confOf(6, 'why-did-you')).toBe('unconfirmed')
+  })
+
+  it('API 返回 confirmation 且可按档位过滤', async () => {
+    const res = await app.request('/api/sessions/pi:conf-s1/signals')
+    const rows = await res.json()
+    expect(rows[0]).toHaveProperty('confirmation')
+    const noise = await (await app.request('/api/sessions/pi:conf-s1/signals?confirmation=likely-noise')).json()
+    expect(noise.length).toBe(1)
+    expect(noise[0].confirmation).toBe('likely-noise')
+  })
+
+  it('存量回填后也有确认状态', () => {
+    const n = dbmod.backfillSignals()
+    expect(n).toBeGreaterThan(0)
+    const nulls = dbmod.db.prepare(`SELECT COUNT(*) n FROM signals WHERE confirmation IS NULL`).get() as any
+    expect(nulls.n).toBe(0)
+    // 回填后三档结论不变
+    expect(confOf(2, 'wrong')).toBe('confirmed')
+    expect(confOf(6, 'why-did-you')).toBe('unconfirmed')
+  })
+})
+
+describe('实质动作判定收窄（#13 review 修正）', () => {
+  beforeAll(() => {
+    const pk = dbmod.saveSessionMeta('pi', {
+      sessionId: 'conf-s2', projectPath: '/data/conf', startedAt: '2026-08-02T10:00:00Z', title: '只读工具',
+    })
+    // 前一条 assistant 只有只读工具调用（read/grep）→ 不算实质动作
+    dbmod.appendMessage(pk, 1, { role: 'assistant', ts: '2026-08-02T10:00:01Z', blocks: [{ type: 'tool_call', name: 'read', input: { path: 'a.ts' } }] })
+    dbmod.appendMessage(pk, 2, { role: 'user', ts: '2026-08-02T10:00:02Z', blocks: [{ type: 'text', text: '别改那个文件' }] })
+    // 写类工具（bash）→ 算实质动作
+    dbmod.appendMessage(pk, 3, { role: 'assistant', ts: '2026-08-02T10:00:03Z', blocks: [{ type: 'tool_call', name: 'bash', input: { command: 'npm test' } }] })
+    dbmod.appendMessage(pk, 4, { role: 'user', ts: '2026-08-02T10:00:04Z', blocks: [{ type: 'text', text: '又挂了，怎么又失败' }] })
+  })
+  const confOf2 = (seq: number, rule: string) =>
+    (dbmod.db.prepare(`SELECT sig.confirmation FROM signals sig JOIN messages m ON m.id = sig.message_id WHERE sig.session_id = 'pi:conf-s2' AND m.seq = ? AND sig.rule = ?`).get(seq, rule) as any)?.confirmation
+
+  it('只读工具不算实质动作 → likely-noise', () => {
+    expect(confOf2(2, 'stop-change')).toBe('likely-noise')
+  })
+  it('写类工具（bash）算实质动作 → confirmed', () => {
+    expect(confOf2(4, 'again')).toBe('confirmed')
+  })
+})

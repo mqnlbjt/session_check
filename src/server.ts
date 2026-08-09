@@ -188,11 +188,12 @@ app.get('/api/sessions/:id/export.md', (c) => {
 
 // ---- 会话的返工信号明细（前端定位用）----
 app.get('/api/sessions/:id/signals', (c) => {
+  const conf = c.req.query('confirmation')
   const rows = db.prepare(`
-    SELECT sig.rule, sig.kind, sig.snippet, sig.ts, m.seq
+    SELECT sig.rule, sig.kind, sig.snippet, sig.ts, sig.confirmation, m.seq
     FROM signals sig JOIN messages m ON m.id = sig.message_id
-    WHERE sig.session_id = ? ORDER BY sig.ts, sig.id
-  `).all(c.req.param('id'))
+    WHERE sig.session_id = ? ${conf ? 'AND sig.confirmation = ?' : ''} ORDER BY sig.ts, sig.id
+  `).all(...(conf ? [c.req.param('id'), conf] : [c.req.param('id')]))
   return c.json(rows)
 })
 
