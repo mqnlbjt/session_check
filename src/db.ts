@@ -137,6 +137,8 @@ CREATE TABLE IF NOT EXISTS pending_writes (
 
 // signals 表在上面第二个块才创建，轻量迁移必须放这里（放上面会被 catch 静默吞掉）
 try { db.exec(`ALTER TABLE signals ADD COLUMN confirmation TEXT`) } catch { /* 已存在 */ }
+try { db.exec(`ALTER TABLE signals ADD COLUMN root_cause TEXT`) } catch { /* 已存在 */ }
+try { db.exec(`ALTER TABLE signals ADD COLUMN cause_confidence REAL`) } catch { /* 已存在 */ }
 
 // FTS5 全文搜索：只索引 text block + tool_call 入参（thinking / tool_result 不索引）
 // trigram 分词：中文可子串匹配，代价是查询需 ≥3 字符（短查询走 LIKE 降级）

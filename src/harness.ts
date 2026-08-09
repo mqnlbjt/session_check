@@ -19,7 +19,7 @@ const CLI_ARGS: Record<AgentType, (prompt: string) => string[]> = {
 }
 
 // 真实 LLM：headless 调 agent CLI（与 review.ts 同套路，拿到输出就杀进程防扩展挂住）
-const defaultLlm: LlmFn = (agent, prompt) =>
+export const defaultLlm: LlmFn = (agent, prompt) =>
   new Promise((resolve, reject) => {
     const workdir = join(tmpdir(), 'spectator-harness')
     mkdirSync(workdir, { recursive: true })
@@ -107,7 +107,7 @@ function topCorrectionSignals(projectPath: string, limit = 3) {
   }))
 }
 
-function dominantAgent(projectPath: string): AgentType {
+export function dominantAgent(projectPath: string): AgentType {
   const row = db.prepare(
     `SELECT agent, COUNT(*) n FROM sessions WHERE project_path = ? GROUP BY agent ORDER BY n DESC LIMIT 1`
   ).get(projectPath) as { agent: AgentType } | undefined

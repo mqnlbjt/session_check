@@ -148,6 +148,19 @@ app.post('/api/harness/generate', async (c) => {
   return c.json({ status: 'started', project_path })
 })
 
+const classifying = new Set<string>()
+app.post('/api/harness/classify', async (c) => {
+  const { project_path } = await c.req.json().catch(() => ({ project_path: null }))
+  if (!project_path) return c.json({ error: 'project_path 必填' }, 400)
+  if (classifying.has(project_path)) return c.json({ error: '该项目正在分类中' }, 409)
+  classifying.add(project_path)
+  import('./root-causes.js')
+    .then((m) => m.classifyRootCauses(project_path))
+    .catch((e) => console.error('[harness] 分类失败:', e))
+    .finally(() => classifying.delete(project_path))
+  return c.json({ status: 'started', project_path })
+})
+
 app.post('/api/harness/suggestions/:id/adopt', (c) => {
   try {
     const r = adoptSuggestion(Number(c.req.param('id')))
