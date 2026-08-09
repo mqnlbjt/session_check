@@ -7,7 +7,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { db } from './db.js'
 import { modelCompare, taskModelStats } from './analytics.js'
-import { persistToInstructions } from './persist.js'
+import { persistToInstructions, instructionsFilePath } from './persist.js'
+import { backupBeforeWrite, recordAgentsMdAdoption } from './install.js'
 import type { AgentType } from './model.js'
 
 export type LlmFn = (agent: AgentType, prompt: string) => Promise<string>
@@ -265,10 +266,14 @@ export function adoptSuggestion(id: number): { adopted_to: string } | null {
   const row = db.prepare(`SELECT * FROM suggestions WHERE id = ?`).get(id) as any
   if (!row || row.status !== 'pending') return null
   const agent = dominantAgent(row.project_path)
+  // #17：采纳也进 installations（统一已采纳历史 + 可撤销）——写盘前先备份
+  const targetPath = instructionsFilePath(row.project_path, agent)
+  const backup = backupBeforeWrite(targetPath)
   const filePath = persistToInstructions(row.project_path, agent, 'harness 建议', [
     { detail: row.content, evidence: row.evidence ?? undefined },
   ])
   db.prepare(`UPDATE suggestions SET status = 'adopted', adopted_to = ? WHERE id = ?`).run(filePath, id)
+  recordAgentsMdAdoption(id, row.project_path, filePath, backup)
   return { adopted_to: filePath }
 }
 

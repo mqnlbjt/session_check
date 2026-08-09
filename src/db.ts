@@ -153,6 +153,26 @@ CREATE TABLE IF NOT EXISTS verifications (
 );
 `)
 
+// #17 安装治理：每次采纳/安装的完整快照（可逆边界）
+db.exec(`
+CREATE TABLE IF NOT EXISTS installations (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  suggestion_id  INTEGER,
+  project_path   TEXT NOT NULL,
+  category       TEXT,            -- 根因类别（agents-md 采纳为 NULL）
+  route          TEXT NOT NULL,   -- skill | hook | mcp | agents-md
+  artifact       TEXT NOT NULL,   -- skill 名 / hook 类型 / guard-rule
+  target_path    TEXT NOT NULL,
+  backup         TEXT,            -- 写入前的原内容（NULL = 文件/目录原本不存在）
+  baseline_json  TEXT NOT NULL,   -- 采纳前 90 天信号基线（#18 对比锚点）
+  status         TEXT NOT NULL DEFAULT 'active',  -- active | uninstalled
+  installed_at   TEXT NOT NULL,
+  uninstalled_at TEXT,
+  UNIQUE(suggestion_id)
+);
+`)
+try { db.exec(`ALTER TABLE installations ADD COLUMN version TEXT`) } catch { /* 已存在 */ }
+
 // FTS5 全文搜索：只索引 text block + tool_call 入参（thinking / tool_result 不索引）
 // trigram 分词：中文可子串匹配，代价是查询需 ≥3 字符（短查询走 LIKE 降级）
 db.exec(`

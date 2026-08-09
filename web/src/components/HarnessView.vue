@@ -49,6 +49,13 @@ interface PendingWrite {
 }
 
 const suggestions = ref<Suggestion[]>([])
+interface Installation {
+  id: number; suggestion_id: number | null; project_path: string
+  category: string | null; route: string; artifact: string; version: string | null
+  target_path: string; status: 'active' | 'uninstalled'
+  installed_at: string; uninstalled_at: string | null
+}
+const installations = ref<Installation[]>([])
 const pendingWrites = ref<PendingWrite[]>([])
 const modelAdvice = ref<ModelAdvice[]>([])
 const taskAdvice = ref<{ task: string; content: string; evidence: string }[]>([])
@@ -64,7 +71,6 @@ const pending = computed(() => suggestions.value.filter((s) => s.status === 'pen
 const pendingRecs = computed(() => pending.value.filter((s) => s.kind === 'recommendation'))
 const pendingGuard = computed(() => pending.value.filter((s) => s.kind !== 'recommendation'))
 const pendingWritesActive = computed(() => pendingWrites.value.filter((w) => w.status === 'pending'))
-const adopted = computed(() => suggestions.value.filter((s) => s.status === 'adopted'))
 const dismissed = computed(() => suggestions.value.filter((s) => s.status === 'dismissed'))
 
 // 有待处理建议的项目 + 有信号但还没建议的项目（可以生成）
@@ -82,6 +88,7 @@ async function load() {
     candidates.value = d.candidates ?? []
     taskMatrix.value = await fetch('/api/analytics/task-models?window=30').then((r) => r.json()).catch(() => [])
     pendingWrites.value = await fetch('/api/pending-writes').then((r) => r.json()).catch(() => [])
+    installations.value = await fetch('/api/harness/installations').then((r) => r.json()).catch(() => [])
   } finally {
     loading.value = false
   }
@@ -161,7 +168,7 @@ interface RecEvidence {
   checks: { kind: string; desc: string; status: string; detail: string }[]
   search_terms: string[]
   candidate: { name: string; installs: number; url: string; description: string } | null
-  hook_draft: string | null; mcp_hint: string | null
+  hook_draft: string | null; mcp_hint: string | null; target_preview: string | null
 }
 function parseRecEvidence(e: string | null): RecEvidence | null {
   if (!e) return null
@@ -191,6 +198,25 @@ async function adopt(s: Suggestion) {
 async function dismiss(s: Suggestion) {
   await fetch(`/api/harness/suggestions/${s.id}/dismiss`, { method: 'POST' })
   feedback.value = '已忽略'
+  await load()
+}
+
+// 确认安装（#17 两阶段：预览已在证据链，点这里才落盘执行）
+async function installRec(s: Suggestion) {
+  const res = await fetch(`/api/harness/suggestions/${s.id}/install`, { method: 'POST' })
+  if (res.ok) {
+    const row = await res.json()
+    feedback.value = `已安装 → ${row.target_path}`
+  } else {
+    feedback.value = `安装失败：${(await res.json()).error ?? res.status}`
+  }
+  await load()
+}
+
+// 一键撤销（#17）：卸载 skill / 还原 hook 配置 / 还原 AGENTS.md
+async function uninstallInst(x: any) {
+  const res = await fetch(`/api/harness/installations/${x.id}/uninstall`, { method: 'POST' })
+  feedback.value = res.ok ? `已撤销：${x.artifact}` : `撤销失败：${(await res.json()).error ?? res.status}`
   await load()
 }
 
@@ -288,9 +314,11 @@ function shortPath(p: string) {
               <span v-if="recEvidenceMap.get(s.id)!.candidate!.installs">（{{ (recEvidenceMap.get(s.id)!.candidate!.installs / 10000).toFixed(1) }}万 安装）</span>
             </div>
             <pre v-if="recEvidenceMap.get(s.id)!.hook_draft" class="w-content">{{ recEvidenceMap.get(s.id)!.hook_draft }}</pre>
+            <div v-if="recEvidenceMap.get(s.id)!.target_preview" class="ev-block mono ev-terms">目标：{{ recEvidenceMap.get(s.id)!.target_preview }}</div>
             <div v-if="recEvidenceMap.get(s.id)!.mcp_hint" class="ev-block">{{ recEvidenceMap.get(s.id)!.mcp_hint }}</div>
           </details>
           <div class="s-meta mono">
+            <button class="btn adopt" @click="installRec(s)">确认安装</button>
             <button class="btn dismiss" @click="dismiss(s)">忽略</button>
           </div>
         </div>
@@ -390,12 +418,17 @@ function shortPath(p: string) {
         <!-- 底部不再单独放重新生成入口（已并入顶部生成面板） -->
       </section>
 
-      <!-- 已采纳 -->
-      <section v-if="adopted.length" class="card">
-        <h3 class="c-title mono">已采纳 · {{ adopted.length }}</h3>
-        <div v-for="s in adopted" :key="s.id" class="done-item">
-          <span class="done-text">{{ s.content }}</span>
-          <span class="done-path mono">→ {{ s.adopted_to }}</span>
+      <!-- 已采纳历史（#17 installations：skill/hook/AGENTS.md 统一，一键撤销） -->
+      <section v-if="installations.length" class="card">
+        <h3 class="c-title mono">已采纳历史 · {{ installations.length }}</h3>
+        <div v-for="x in installations" :key="x.id" class="done-item" :class="{ dim: x.status === 'uninstalled' }">
+          <span class="done-text">
+            <span class="mono" style="font-size:10px;color:var(--dim)">[{{ x.route }}]</span>
+            {{ x.artifact }}
+            <span v-if="x.status === 'uninstalled'" class="mono" style="font-size:10px;color:var(--dim)">（已撤销）</span>
+          </span>
+          <span class="done-path mono">→ {{ x.target_path }} · {{ x.installed_at.slice(0, 10) }}{{ x.version ? ` · v${x.version}` : '' }}</span>
+          <button v-if="x.status === 'active'" class="btn dismiss" @click="uninstallInst(x)">撤销</button>
         </div>
       </section>
 

@@ -56,10 +56,14 @@ function computeUpsertedContent(filePath: string, newEntries: string[]): string 
     : content.trimEnd() + '\n\n' + block + '\n'
 }
 
+// 指令文件路径推导（单一来源：写盘与备份共用）
+export function instructionsFilePath(projectPath: string, agent: string): string {
+  return join(projectPath, agent === 'claude' ? 'CLAUDE.md' : 'AGENTS.md')
+}
+
 // 写入项目指令文件：claude → CLAUDE.md，pi/codex → AGENTS.md
 export function persistToInstructions(projectPath: string, agent: string, sessionTitle: string, lessons: Lesson[]): string {
-  const fileName = agent === 'claude' ? 'CLAUDE.md' : 'AGENTS.md'
-  const filePath = join(projectPath, fileName)
+  const filePath = instructionsFilePath(projectPath, agent)
   const date = new Date().toISOString().slice(0, 10)
   const entries = lessons.map((l) => `- [${date} · ${sessionTitle.slice(0, 30)}] ${l.detail}`)
   upsertBlock(filePath, entries)

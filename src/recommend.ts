@@ -6,6 +6,7 @@ import { ROOT_CAUSES } from './root-causes.js'
 import { classifyRootCauses } from './root-causes.js'
 import { verifyProject } from './static-checks.js'
 import { defaultLlm, type LlmFn } from './harness.js'
+import { join } from 'node:path'
 
 export interface SkillCandidate { name: string; installs: number; url: string; description: string }
 export type SearchSkillsFn = (query: string) => Promise<SkillCandidate>
@@ -111,6 +112,10 @@ export async function assembleRecommendations(
       candidate,
       hook_draft,
       mcp_hint,
+      // 预览用目标位置（#17 两阶段：确认前展示将要写入/创建的路径）
+      target_preview: cat.route === 'skill' && candidate ? `~/.pi/agent/skills/${candidate.name}/`
+        : cat.route === 'hook' ? join(projectPath, '.claude/settings.json')
+        : null,
     }), now)
     created.push(v.category)
   }

@@ -190,6 +190,31 @@ app.post('/api/harness/assemble', async (c) => {
   return c.json({ status: 'started', project_path })
 })
 
+app.post('/api/harness/suggestions/:id/install', async (c) => {
+  try {
+    const { installSuggestion } = await import('./install.js')
+    const row = await installSuggestion(Number(c.req.param('id')))
+    return c.json(row)
+  } catch (e: any) {
+    return c.json({ error: `安装失败：${e?.message ?? '未知错误'}` }, 500)
+  }
+})
+
+app.get('/api/harness/installations', (c) => {
+  return c.json(db.prepare(
+    `SELECT * FROM installations ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, installed_at DESC LIMIT 100`
+  ).all())
+})
+
+app.post('/api/harness/installations/:id/uninstall', async (c) => {
+  try {
+    const { uninstall } = await import('./install.js')
+    return c.json(await uninstall(Number(c.req.param('id'))))
+  } catch (e: any) {
+    return c.json({ error: `撤销失败：${e?.message ?? '未知错误'}` }, 500)
+  }
+})
+
 app.post('/api/harness/suggestions/:id/adopt', (c) => {
   try {
     const r = adoptSuggestion(Number(c.req.param('id')))
