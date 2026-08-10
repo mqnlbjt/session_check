@@ -192,3 +192,17 @@ describe('实质动作判定收窄（#13 review 修正）', () => {
     expect(confOf2(4, 'again')).toBe('confirmed')
   })
 })
+
+describe('回填保留 LLM 分类成果（审计 #6）', () => {
+  it('backfillSignals 重建后 root_cause/cause_confidence 不丢', async () => {
+    // 给现有信号打上分类
+    dbmod.db.prepare(`UPDATE signals SET root_cause = 'overreach', cause_confidence = 0.85 WHERE rowid = (SELECT MIN(rowid) FROM signals)`).run()
+    const before = dbmod.db.prepare(`SELECT session_id, message_id, rule, root_cause, cause_confidence FROM signals WHERE root_cause IS NOT NULL`).all() as any[]
+    expect(before.length).toBeGreaterThan(0)
+    dbmod.backfillSignals()
+    const after = dbmod.db.prepare(`SELECT session_id, message_id, rule FROM signals WHERE root_cause = 'overreach'`).all() as any[]
+    expect(after).toEqual(before.map((b) => ({ session_id: b.session_id, message_id: b.message_id, rule: b.rule })))
+    const conf = dbmod.db.prepare(`SELECT cause_confidence FROM signals WHERE root_cause = 'overreach' LIMIT 1`).get() as any
+    expect(conf.cause_confidence).toBe(0.85)
+  })
+})

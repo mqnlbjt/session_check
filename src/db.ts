@@ -224,19 +224,26 @@ export function backfillFts(): number {
 
 // 信号回填：全量重建（user 消息量级小，DELETE + 重扫最简单且天然幂等）
 export function backfillSignals(): number {
-  // ORDER BY 保证同会话内按 seq 顺序重建，佐证计数（同规则已存在的判定）才稳定
   const userMsgs = db.prepare(`SELECT id, session_id, seq, ts, blocks_json FROM messages WHERE role = 'user' ORDER BY session_id, seq`).all() as {
     id: number; session_id: string; seq: number; ts: string; blocks_json: string
   }[]
   let n = 0
   const tx = db.transaction(() => {
+    // 审计 #6：全量重建前快照 LLM 分类成果（root_cause 是真金白银算出来的，DELETE 不能带走）
+    const saved = new Map(
+      (db.prepare(`SELECT session_id, message_id, rule, root_cause, cause_confidence FROM signals WHERE root_cause IS NOT NULL`).all() as any[])
+        .map((r) => [`${r.session_id}|${r.message_id}|${r.rule}`, { root_cause: r.root_cause, cause_confidence: r.cause_confidence }])
+    )
     db.exec('DELETE FROM signals')
+    const restore = db.prepare(`UPDATE signals SET root_cause = ?, cause_confidence = ? WHERE session_id = ? AND message_id = ? AND rule = ?`)
     for (const m of userMsgs) {
       const blocks = JSON.parse(m.blocks_json) as Block[]
       const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n')
       if (!text.trim()) continue
       for (const h of scanSignals(text)) {
         insertSignal.run(m.session_id, m.id, h.rule, h.kind, h.snippet, m.ts, classifyConfirmation(m.session_id, m.seq, h.rule))
+        const s = saved.get(`${m.session_id}|${m.id}|${h.rule}`)
+        if (s) restore.run(s.root_cause, s.cause_confidence, m.session_id, m.id, h.rule)
         n++
       }
     }

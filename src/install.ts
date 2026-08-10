@@ -24,12 +24,21 @@ const defaultSkillInstaller: SkillInstaller = (name) =>
       resolve({ dir: join(homedir(), '.pi/agent/skills', name) })
     })
   }).then((r) => {
+    // 纵深防御：目录必须在 skills 根下（校验名之后依然再查一道）
+    if (!r.dir.startsWith(join(homedir(), '.pi/agent/skills') + '/')) throw new Error(`路径越界：${r.dir}`)
     if (!existsSync(r.dir)) throw new Error(`安装完成但目录不存在：${r.dir}`)
     return r
   })
 
 const defaultSkillRemover: SkillRemover = async (dir) => {
   rmSync(dir, { recursive: true, force: true })
+}
+
+// skill 名白名单（审计 M1/M2）：外部 CLI 输出不可信——防 npx flag 注入（--call=... 即 RCE）
+// 与路径穿越（join 归一化 .. 后 rm -rf 会删任意目录）
+const SKILL_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/i
+function assertSkillName(name: string): void {
+  if (!SKILL_NAME.test(name)) throw new Error(`非法 skill 名：${name}`)
 }
 
 function readSafe(path: string): string | null {
@@ -89,6 +98,7 @@ export async function installSuggestion(suggestionId: number, deps: InstallDeps 
 
   if (ev.route === 'skill') {
     if (!ev.candidate?.name) throw new Error('无候选 skill，无法自动安装')
+    assertSkillName(ev.candidate.name)
     const installer = deps.skillInstaller ?? defaultSkillInstaller
     const { dir } = await installer(ev.candidate.name)
     targetPath = dir
@@ -150,8 +160,14 @@ export function backupBeforeWrite(filePath: string): string | null {
 }
 
 export function recordAgentsMdAdoption(suggestionId: number, projectPath: string, filePath: string, backup: string | null): void {
-  const existing = db.prepare(`SELECT 1 FROM installations WHERE suggestion_id = ?`).get(suggestionId)
-  if (existing) return
+  const existing = db.prepare(`SELECT id, status FROM installations WHERE suggestion_id = ?`).get(suggestionId) as any
+  if (existing) {
+    if (existing.status === 'active') return // 幂等
+    // 撤销后重新采纳：复用行转回 active，刷新备份/基线（审计正确性 #2：否则第二次写入无法撤销）
+    db.prepare(`UPDATE installations SET target_path = ?, backup = ?, baseline_json = ?, status = 'active', installed_at = ?, uninstalled_at = NULL WHERE id = ?`)
+      .run(filePath, backup, snapshotBaseline(projectPath, null), new Date().toISOString(), existing.id)
+    return
+  }
   insertInstallation.run(
     suggestionId, projectPath, null, 'agents-md', 'guard-rule',
     null, filePath, backup, snapshotBaseline(projectPath, null), new Date().toISOString(),

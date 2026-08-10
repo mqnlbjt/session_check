@@ -57,7 +57,7 @@ export async function modelCompare(windowDays = 90) {
     (db.prepare(`
       SELECT s.model, COUNT(*) n FROM signals sig
       JOIN sessions s ON s.id = sig.session_id
-      WHERE sig.kind = 'correction' AND s.${MAIN_ONLY} AND sig.ts >= ${window}
+      WHERE sig.kind = 'correction' AND s.${MAIN_ONLY} AND sig.ts >= ${window} AND s.started_at >= ${window}
       GROUP BY s.model
     `).all() as { model: string; n: number }[]).map((r) => [r.model, r.n])
   )

@@ -153,3 +153,45 @@ describe('撤销后重装（review 修正回归）', () => {
     expect(n.n).toBe(1)
   })
 })
+
+describe('name 校验（审计 M1/M2）', () => {
+  it('flag 注入名（--call=...）被拒绝', async () => {
+    const sugId = mkRecSug(skillProj, {
+      category: 'tool-gap', category_label: '工具能力缺口', route: 'skill',
+      candidate: { name: '--call=echo pwned', installs: 0, url: '', description: '' },
+    })
+    await expect(inst.installSuggestion(sugId, { skillInstaller: async (n) => ({ dir: `/fake/${n}` }) }))
+      .rejects.toThrow(/非法 skill 名/)
+  })
+  it('路径穿越名（../../x）被拒绝', async () => {
+    const sugId = mkRecSug(skillProj, {
+      category: 'tool-gap', category_label: '工具能力缺口', route: 'skill',
+      candidate: { name: '../../.config', installs: 0, url: '', description: '' },
+    })
+    await expect(inst.installSuggestion(sugId, { skillInstaller: async (n) => ({ dir: `/fake/${n}` }) }))
+      .rejects.toThrow(/非法 skill 名/)
+  })
+})
+
+describe('AGENTS.md 重新采纳（审计正确性 #2）', () => {
+  it('撤销后重新 adopt：installation 行转回 active 且可再次撤销', async () => {
+    const harness = await import('../src/harness.js')
+    const dir = mkdtempSync(join(tmpdir(), 'spect-readopt-'))
+    dbmod.saveSessionMeta('pi', { sessionId: 'ra-1', projectPath: dir, startedAt: daysAgo(1), title: 'RA' })
+    const sugId = Number(dbmod.db.prepare(
+      `INSERT INTO suggestions (project_path, kind, content, status, created_at) VALUES (?, 'guard_rule', '改前备份原文件', 'pending', ?)`
+    ).run(dir, new Date().toISOString()).lastInsertRowid)
+    harness.adoptSuggestion(sugId)
+    let row = dbmod.db.prepare(`SELECT * FROM installations WHERE suggestion_id = ?`).get(sugId) as any
+    expect(row.status).toBe('active')
+    await inst.uninstall(row.id, {})
+    // 撤销把建议退回 pending → 用户可以重新 adopt
+    harness.adoptSuggestion(sugId)
+    row = dbmod.db.prepare(`SELECT * FROM installations WHERE suggestion_id = ?`).get(sugId) as any
+    expect(row.status).toBe('active') // 修复前：existing 早退，永远是 uninstalled
+    expect(row.uninstalled_at).toBeNull()
+    // 第二次采纳也能撤销
+    const r2 = await inst.uninstall(row.id, {})
+    expect(r2.status).toBe('uninstalled')
+  })
+})

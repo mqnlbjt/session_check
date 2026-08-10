@@ -18,6 +18,7 @@ import { extractLessons, planPersist, applyPersistPlan, type PersistMode } from 
 // 复盘沉淀结果（sessionPk → 写入的文件路径），供 review-status 查询
 export const lastPersist = new Map<string, string>()
 import { scanAll, backfillAllTitles } from './ingest.js'
+import { backfillTps } from './tps.js'
 import { startWatch } from './watch.js'
 
 export const app = new Hono()
@@ -152,7 +153,8 @@ const classifying = new Set<string>()
 app.post('/api/harness/classify', async (c) => {
   const { project_path } = await c.req.json().catch(() => ({ project_path: null }))
   if (!project_path) return c.json({ error: 'project_path 必填' }, 400)
-  if (classifying.has(project_path)) return c.json({ error: '该项目正在分类中' }, 409)
+  // 审计 #5：assemble 内部会跑分类，两个 guard 必须互斥，否则同批信号送两次 LLM
+  if (classifying.has(project_path) || assembling.has(project_path)) return c.json({ error: '该项目正在处理中' }, 409)
   classifying.add(project_path)
   import('./root-causes.js')
     .then((m) => m.classifyRootCauses(project_path))
@@ -181,7 +183,7 @@ const assembling = new Set<string>()
 app.post('/api/harness/assemble', async (c) => {
   const { project_path } = await c.req.json().catch(() => ({ project_path: null }))
   if (!project_path) return c.json({ error: 'project_path 必填' }, 400)
-  if (assembling.has(project_path)) return c.json({ error: '该项目正在生成建议中' }, 409)
+  if (assembling.has(project_path) || classifying.has(project_path)) return c.json({ error: '该项目正在处理中' }, 409)
   assembling.add(project_path)
   import('./recommend.js')
     .then((m) => m.assembleRecommendations(project_path))
@@ -190,13 +192,20 @@ app.post('/api/harness/assemble', async (c) => {
   return c.json({ status: 'started', project_path })
 })
 
+// install/uninstall in-flight 防重（审计 #4）：npx 最长 120s，无 guard 时并发请求会双重执行 + 撞 UNIQUE 报误导性 500
+const installJobs = new Set<number>()
 app.post('/api/harness/suggestions/:id/install', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (installJobs.has(id)) return c.json({ error: '该建议正在安装中' }, 409)
+  installJobs.add(id)
   try {
     const { installSuggestion } = await import('./install.js')
-    const row = await installSuggestion(Number(c.req.param('id')))
+    const row = await installSuggestion(id)
     return c.json(row)
   } catch (e: any) {
     return c.json({ error: `安装失败：${e?.message ?? '未知错误'}` }, 500)
+  } finally {
+    installJobs.delete(id)
   }
 })
 
@@ -213,11 +222,16 @@ app.get('/api/harness/effectiveness', async (c) => {
 })
 
 app.post('/api/harness/installations/:id/uninstall', async (c) => {
+  const id = Number(c.req.param('id'))
+  if (installJobs.has(id)) return c.json({ error: '该记录正在操作中' }, 409)
+  installJobs.add(id)
   try {
     const { uninstall } = await import('./install.js')
-    return c.json(await uninstall(Number(c.req.param('id'))))
+    return c.json(await uninstall(id))
   } catch (e: any) {
     return c.json({ error: `撤销失败：${e?.message ?? '未知错误'}` }, 500)
+  } finally {
+    installJobs.delete(id)
   }
 })
 
@@ -646,8 +660,13 @@ export function startServer(port = 8321) {
     console.log(`[ingest] +${added} 条 <- ${path}`)
     broadcastIngest(getSessionPkByPath(path), added)
     // 节流补标题：新 session 的消息入库后才能生成标题
+    // 顺带重算 TPS（审计正确性 #3：watch 增量路径不跑 backfillTps，avg_tps 会永久 NULL）
     if (!titleTimer) {
-      titleTimer = setTimeout(() => { titleTimer = null; backfillAllTitles() }, 2000)
+      titleTimer = setTimeout(() => {
+        titleTimer = null
+        backfillAllTitles()
+        backfillTps()
+      }, 2000)
     }
   })
   // 默认只绑回环：会话全文/项目路径都是敏感数据，0.0.0.0 会把它们暴露给整个局域网（审计 H1）
