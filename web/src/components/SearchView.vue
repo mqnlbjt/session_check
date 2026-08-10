@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
 import { api, fmtTime, type SearchRow } from '../api'
+import { Search, ArrowRight } from 'lucide-vue-next'
 
 const emit = defineEmits<{ jump: [sessionId: string, seq: number] }>()
 
@@ -69,8 +70,15 @@ const ROLE_LABEL: Record<string, string> = { user: '用户', assistant: '助手'
 
 <template>
   <div class="searchview" @scroll="onScroll">
-    <div class="bar">
-      <input v-model="q" class="q" type="search" placeholder="全文搜索消息内容（支持中文，≥3 字符走索引）…" aria-label="全文搜索" />
+    <header class="view-head rise">
+      <h2 class="view-title">搜索</h2>
+      <span class="view-sub mono">Full-text · 消息正文与命令秒级定位</span>
+    </header>
+    <div class="bar rise rise-1">
+      <div class="q-wrap">
+        <Search class="lucide q-icon" />
+        <input v-model="q" class="q" type="search" placeholder="全文搜索消息内容（支持中文，≥3 字符走索引）…" aria-label="全文搜索" />
+      </div>
       <div class="filters">
         <div class="chips" role="tablist" aria-label="按 agent 筛选">
           <button
@@ -92,8 +100,9 @@ const ROLE_LABEL: Record<string, string> = { user: '用户', assistant: '助手'
     <template v-else>
       <div class="count mono">{{ total.toLocaleString() }} 条匹配</div>
       <button
-        v-for="r in rows" :key="r.message_id"
-        class="hit"
+        v-for="(r, ri) in rows" :key="r.message_id"
+        class="hit rise"
+        :style="{ animationDelay: `${Math.min(ri, 10) * 0.04}s` }"
         @click="emit('jump', r.session_id, r.seq)"
       >
         <div class="hit-head mono">
@@ -101,6 +110,7 @@ const ROLE_LABEL: Record<string, string> = { user: '用户', assistant: '助手'
           <span class="role">{{ ROLE_LABEL[r.role] ?? r.role }}</span>
           <span class="time">{{ fmtTime(r.ts) }}</span>
           <span class="proj">{{ r.project_path }}</span>
+          <ArrowRight class="lucide go" />
         </div>
         <!-- eslint-disable-next-line vue/no-v-html -->
         <div class="snip" v-html="renderSnippet(r.snippet)"></div>
@@ -112,21 +122,29 @@ const ROLE_LABEL: Record<string, string> = { user: '用户', assistant: '助手'
 </template>
 
 <style scoped>
-.searchview { height: 100%; overflow-y: auto; padding: 16px 20px 40px; }
+.searchview { height: 100%; overflow-y: auto; padding: 26px 28px 48px; max-width: 1080px; margin: 0 auto; width: 100%; }
 
-.bar { margin-bottom: 14px; }
+.bar { margin-bottom: 16px; }
+.q-wrap { position: relative; margin-bottom: 9px; }
+.q-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--faint);
+  pointer-events: none;
+}
 .q {
   width: 100%;
   background: var(--ink);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 8px;
   color: var(--text);
   font-size: 14px;
-  padding: 9px 12px;
-  margin-bottom: 9px;
+  padding: 11px 12px 11px 36px;
 }
 .q::placeholder, .proj::placeholder { color: var(--faint); }
-.q:focus, .proj:focus { border-color: var(--amber); outline: none; }
+.q:focus, .proj:focus { border-color: var(--amber); outline: none; box-shadow: 0 0 0 3px rgba(232, 163, 61, 0.12); }
 
 .filters { display: flex; gap: 10px; align-items: center; }
 .chips { display: flex; gap: 6px; }
@@ -160,12 +178,19 @@ const ROLE_LABEL: Record<string, string> = { user: '用户', assistant: '助手'
   text-align: left;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 10px 14px;
+  border-radius: 8px;
+  padding: 12px 16px;
   margin-bottom: 8px;
   cursor: pointer;
+  transition: border-color 0.2s var(--ease-out), transform 0.2s var(--spring), box-shadow 0.2s var(--ease-out);
 }
-.hit:hover { border-color: var(--amber); }
+.hit:hover {
+  border-color: rgba(232, 163, 61, 0.5);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(5, 7, 10, 0.4);
+}
+.hit:hover .go { opacity: 1; transform: translateX(0); color: var(--amber); }
+.go { opacity: 0; transform: translateX(-4px); transition: opacity 0.2s, transform 0.2s var(--spring), color 0.2s; margin-left: 8px; }
 
 .hit-head { display: flex; gap: 10px; align-items: center; font-size: 10px; color: var(--faint); margin-bottom: 6px; }
 .badge { text-transform: uppercase; letter-spacing: 0.08em; }

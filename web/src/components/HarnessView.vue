@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { Lightbulb, Target, ChevronDown, ChevronRight, PenLine, ListChecks, Cpu, ShieldCheck, History, Trash2, Undo2 } from 'lucide-vue-next'
 
 interface Suggestion {
   id: number
@@ -271,9 +272,14 @@ function shortPath(p: string) {
     <template v-else>
       <div v-if="feedback" class="feedback mono">{{ feedback }}</div>
 
+      <header class="view-head rise">
+        <h2 class="view-title">Harness</h2>
+        <span class="view-sub mono">改进闭环 · 观测 → 诊断 → 推荐 → 落地</span>
+      </header>
+
       <!-- 待确认的写入（复盘沉淀两阶段：确认才落盘） -->
-      <section v-if="pendingWritesActive.length" class="card pending-writes">
-        <h3 class="c-title mono">待确认的写入 · {{ pendingWritesActive.length }}</h3>
+      <section v-if="pendingWritesActive.length" class="card pending-writes rise">
+        <h3 class="c-title mono"><PenLine class="lucide" /> 待确认的写入 · {{ pendingWritesActive.length }}</h3>
         <div v-for="w in pendingWritesActive" :key="w.id" class="write-item">
           <div class="w-head mono">
             <span class="w-kind" :class="w.kind">{{ w.kind === 'skill' ? 'SKILL' : 'AGENTS.md' }}</span>
@@ -288,8 +294,8 @@ function shortPath(p: string) {
       </section>
 
       <!-- 改进清单（#16）：待诊断信号 → 推荐卡片（会清空的清单，不是 feed） -->
-      <section class="card">
-        <h3 class="c-title mono">改进清单 · skills / hooks / MCP 推荐</h3>
+      <section class="card rise rise-1">
+        <h3 class="c-title mono"><ListChecks class="lucide" /> 改进清单 · skills / hooks / MCP 推荐</h3>
 
         <!-- 待诊断弱提示：项目名 + 信号数，够具体才不会被遗忘 -->
         <div v-if="undiagnosed.length" class="undiagnosed">
@@ -339,12 +345,12 @@ function shortPath(p: string) {
       </section>
 
       <!-- 模型建议 -->
-      <section class="card">
-        <h3 class="c-title mono">模型选择建议 · 近 30 天数据</h3>
+      <section class="card rise rise-2">
+        <h3 class="c-title mono"><Cpu class="lucide" /> 模型选择建议 · 近 30 天数据</h3>
         <div v-if="!modelAdvice.length" class="hint">当前模型组合没有明显的优化空间</div>
         <div v-for="(a, i) in modelAdvice" :key="i" class="advice-block">
           <div class="advice">
-            <span class="bulb">💡</span>
+            <span class="bulb"><Lightbulb class="lucide" /></span>
             <span class="advice-text">{{ a.content }}</span>
           </div>
           <table v-if="parseEvidence(a.evidence)" class="cmp">
@@ -371,10 +377,10 @@ function shortPath(p: string) {
       </section>
 
       <!-- 任务×模型推荐 -->
-      <section class="card">
-        <h3 class="c-title mono">任务 × 模型 · 什么任务用什么模型 · 近 30 天</h3>
+      <section class="card rise rise-3">
+        <h3 class="c-title mono"><Target class="lucide" /> 任务 × 模型 · 什么任务用什么模型 · 近 30 天</h3>
         <div v-for="(a, i) in taskAdvice" :key="i" class="advice">
-          <span class="bulb">🎯</span>
+          <span class="bulb"><Target class="lucide" /></span>
           <span class="advice-text">{{ a.content }}</span>
         </div>
         <div v-if="!taskAdvice.length" class="hint">各任务下的模型选择当前都比较合理</div>
@@ -400,8 +406,8 @@ function shortPath(p: string) {
       </section>
 
       <!-- 防呆规则建议 -->
-      <section class="card">
-        <h3 class="c-title mono">防呆规则 · 由纠正信号驱动</h3>
+      <section class="card rise rise-4">
+        <h3 class="c-title mono"><ShieldCheck class="lucide" /> 防呆规则 · 由纠正信号驱动</h3>
 
         <!-- 生成入口：有纠正信号的项目（C1 修复：不依赖已有建议） -->
         <div class="gen-panel">
@@ -412,7 +418,7 @@ function shortPath(p: string) {
             :disabled="generatingFor === cand.project_path"
             :title="cand.project_path"
             @click="generate(cand.project_path)"
-          >{{ generatingFor === cand.project_path ? '生成中…' : `${shortPath(cand.project_path)} ↺${cand.corrections}` }}</button>
+          ><template v-if="generatingFor === cand.project_path">生成中…</template><template v-else>{{ shortPath(cand.project_path) }} <Undo2 class="lucide" />{{ cand.corrections }}</template></button>
         </div>
 
         <div v-if="!pendingGuard.length" class="hint">暂无待处理建议。点上方项目按钮，用该项目的纠正信号生成防呆规则。</div>
@@ -433,8 +439,8 @@ function shortPath(p: string) {
       </section>
 
       <!-- 已采纳历史（#17 installations：skill/hook/AGENTS.md 统一，一键撤销；#18 效果追踪） -->
-      <section v-if="installations.length" class="card">
-        <h3 class="c-title mono">已采纳历史 · {{ installations.length }}</h3>
+      <section v-if="installations.length" class="card rise rise-5">
+        <h3 class="c-title mono"><History class="lucide" /> 已采纳历史 · {{ installations.length }}</h3>
         <div v-for="x in installations" :key="x.id" class="done-item" :class="{ dim: x.status === 'uninstalled' }">
           <span class="done-text">
             <span class="mono" style="font-size:10px;color:var(--dim)">[{{ x.route }}]</span>
@@ -454,9 +460,10 @@ function shortPath(p: string) {
       </section>
 
       <!-- 已忽略（折叠） -->
-      <section v-if="dismissed.length" class="card">
+      <section v-if="dismissed.length" class="card rise rise-5">
         <button class="c-title mono toggle" @click="showDismissed = !showDismissed">
-          已忽略 · {{ dismissed.length }} {{ showDismissed ? '▾' : '▸' }}
+          <Trash2 class="lucide" /> 已忽略 · {{ dismissed.length }}
+          <component :is="showDismissed ? ChevronDown : ChevronRight" class="lucide" />
         </button>
         <template v-if="showDismissed">
           <div v-for="s in dismissed" :key="s.id" class="done-item dim">
@@ -469,16 +476,25 @@ function shortPath(p: string) {
 </template>
 
 <style scoped>
-.harness { height: 100%; overflow-y: auto; padding: 16px 20px 40px; display: flex; flex-direction: column; gap: 14px; }
+.harness { height: 100%; overflow-y: auto; padding: 26px 28px 48px; display: flex; flex-direction: column; gap: 16px; max-width: 1080px; margin: 0 auto; width: 100%; }
 .hint { padding: 16px; text-align: center; color: var(--dim); font-size: 12px; }
 .feedback {
   padding: 8px 14px; font-size: 11px; color: var(--amber);
   background: rgba(232, 163, 61, 0.08); border: 1px solid rgba(232, 163, 61, 0.3); border-radius: 6px;
 }
 
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px 18px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transition: border-color 0.2s var(--ease-out);
+}
+.card:hover { border-color: var(--faint); }
 .c-title { font-size: 11px; color: var(--dim); letter-spacing: 0.1em; margin-bottom: 12px; font-weight: 500; }
-.toggle { background: none; border: none; cursor: pointer; padding: 0; }
+.c-title .lucide { width: 12px; height: 12px; margin-right: 5px; color: var(--faint); }
+.toggle { background: none; border: none; cursor: pointer; padding: 0; display: inline-flex; align-items: center; gap: 5px; }
 
 /* 改进清单（#16） */
 .undiagnosed { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
@@ -538,12 +554,16 @@ function shortPath(p: string) {
 .s-meta { display: flex; align-items: center; gap: 8px; font-size: 10px; }
 .s-evidence { flex: 1; color: var(--faint); }
 .btn {
-  border: 1px solid var(--line); border-radius: 4px; background: transparent;
-  color: var(--dim); font-size: 11px; padding: 3px 10px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--line); border-radius: 6px; background: transparent;
+  color: var(--dim); font-size: 11px; padding: 4px 12px; cursor: pointer;
+  transition: color 0.2s var(--ease-out), border-color 0.2s var(--ease-out), background 0.2s var(--ease-out), transform 0.15s var(--spring);
 }
-.btn:hover { color: var(--text); }
+.btn:hover:not(:disabled) { color: var(--text); transform: translateY(-1px); }
+.btn:active:not(:disabled) { transform: scale(0.97); }
+.btn .lucide { width: 11px; height: 11px; }
 .btn.adopt { color: var(--amber); border-color: rgba(232, 163, 61, 0.4); }
-.btn.adopt:hover { background: rgba(232, 163, 61, 0.12); }
+.btn.adopt:hover:not(:disabled) { color: var(--amber); background: rgba(232, 163, 61, 0.12); }
 .btn.gen { margin-right: 8px; }
 .btn:disabled { opacity: 0.5; cursor: wait; }
 .gen-panel { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }

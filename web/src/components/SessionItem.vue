@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { fmtTime, fmtTokens, type SessionRow } from '../api'
+import { Undo2, TriangleAlert, GitBranch } from 'lucide-vue-next'
 import SparkBar from './SparkBar.vue'
 
 defineProps<{
@@ -24,9 +25,15 @@ const AGENT_LABEL: Record<string, string> = { pi: 'PI', claude: 'CC', codex: 'CX
     </div>
     <div class="meta">
       <span>{{ session.message_count }} 消息</span>
-      <span v-if="session.subagent_count" class="subs">▸ {{ session.subagent_count }} sub</span>
-      <span v-if="session.risk_count" class="risk" :title="'命中危险/密钥规则'">⚠ {{ session.risk_count }}</span>
-      <span v-if="session.correction_count" class="correction" :title="'用户纠正次数（返工信号）'">↺ {{ session.correction_count }}</span>
+      <span v-if="session.subagent_count" class="subs" title="子代理会话数">
+        <GitBranch class="lucide" />{{ session.subagent_count }}
+      </span>
+      <span v-if="session.risk_count" class="risk" title="命中危险/密钥规则">
+        <TriangleAlert class="lucide" />{{ session.risk_count }}
+      </span>
+      <span v-if="session.correction_count" class="correction" title="用户纠正次数（返工信号）">
+        <Undo2 class="lucide" />{{ session.correction_count }}
+      </span>
       <span v-if="session.model" class="model mono">{{ session.model }}</span>
       <span v-if="session.output_tokens" class="mono">{{ fmtTokens(session.output_tokens) }} tok</span>
       <span class="time mono">{{ fmtTime(session.started_at) }}</span>
@@ -46,10 +53,11 @@ const AGENT_LABEL: Record<string, string> = { pi: 'PI', claude: 'CC', codex: 'CX
   border-bottom: 1px solid var(--line);
   padding: 10px 14px 8px;
   color: var(--text);
-  transition: background 0.12s;
+  transition: background 0.2s var(--ease-out), border-color 0.2s var(--ease-out), padding-left 0.2s var(--spring);
 }
-.row:hover { background: var(--panel-2); }
+.row:hover { background: var(--panel-2); padding-left: 18px; }
 .row.active { background: var(--panel-2); border-left-color: var(--amber); }
+.row:active { transform: scale(0.995); }
 
 .top { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .badge {
@@ -75,14 +83,16 @@ const AGENT_LABEL: Record<string, string> = { pi: 'PI', claude: 'CC', codex: 'CX
 
 .meta {
   display: flex;
+  align-items: center;
   gap: 10px;
   margin: 3px 0 6px;
   font-size: 11px;
   color: var(--dim);
 }
+.meta .lucide { width: 11px; height: 11px; margin-right: 3px; }
 .meta .subs { color: var(--amber); }
-.risk { color: var(--danger); font-size: 11px; }
-.correction { color: var(--amber); font-size: 11px; }
+.risk { color: var(--danger); }
+.correction { color: var(--amber); }
 .model {
   max-width: 110px;
   white-space: nowrap;

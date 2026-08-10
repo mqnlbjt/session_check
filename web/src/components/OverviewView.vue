@@ -112,7 +112,7 @@ function maxOf(nums: (number | null)[]) {
       <!-- 趋势 -->
       <section class="row three">
         <div class="card">
-          <h3 class="c-title mono">活跃会话 / 天 · 近 30 天</h3>
+          <h3 class="c-title mono"><Activity class="lucide" /> 活跃会话 / 天 · 近 30 天</h3>
           <svg :viewBox="`0 0 ${CHART_W} ${CHART_H}`" class="chart">
             <rect v-for="(b, i) in chartBars(fillDays(data.daily, 'sessions'))" :key="i"
               :x="b.x" :y="b.y" :width="b.w" :height="b.h"
@@ -229,10 +229,13 @@ function maxOf(nums: (number | null)[]) {
 .overview {
   height: 100%;
   overflow-y: auto;
-  padding: 18px 20px 40px;
+  padding: 26px 28px 48px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
+  max-width: 1440px;
+  margin: 0 auto;
+  width: 100%;
 }
 .state { padding: 60px; text-align: center; color: var(--dim); }
 
@@ -242,17 +245,30 @@ function maxOf(nums: (number | null)[]) {
   min-width: 130px;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 12px 14px;
+  border-radius: 8px;
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
   gap: 4px;
+  transition: transform 0.25s var(--spring), border-color 0.2s var(--ease-out), box-shadow 0.25s var(--ease-out);
+}
+.kpi:hover {
+  transform: translateY(-2px);
+  border-color: var(--faint);
+  box-shadow: 0 8px 24px rgba(5, 7, 10, 0.5);
 }
 .k-label { font-size: 10px; letter-spacing: 0.08em; color: var(--faint); text-transform: uppercase; }
 .k-label.pi { color: var(--pi); }
 .k-label.claude { color: var(--claude); }
 .k-label.codex { color: var(--codex); }
-.k-value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.k-value {
+  font-family: var(--display);
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
 .k-unit { font-size: 11px; color: var(--dim); font-weight: 400; }
 
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -260,11 +276,15 @@ function maxOf(nums: (number | null)[]) {
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 14px 16px;
+  border-radius: 10px;
+  padding: 16px 18px;
   min-width: 0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transition: border-color 0.2s var(--ease-out), transform 0.25s var(--spring);
 }
+.card:hover { border-color: var(--faint); }
 .c-title { font-size: 10px; letter-spacing: 0.1em; color: var(--faint); text-transform: uppercase; margin-bottom: 10px; }
+.c-title .lucide { width: 12px; height: 12px; margin-right: 5px; color: var(--dim); }
 
 .chart { width: 100%; height: 90px; display: block; }
 .bar { fill: var(--pi); opacity: 0.75; }

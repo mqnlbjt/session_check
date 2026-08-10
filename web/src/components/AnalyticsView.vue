@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { api, fmtTokens } from '../api'
+import { CalendarDays, Table2, FolderGit2, BookOpen, Undo2, Frown } from 'lucide-vue-next'
 
 interface HeatCell { messages: number; output_tokens: number }
 interface ModelRow { model: string; sessions: number; input_tokens: number; output_tokens: number; cost: number | null; avg_tps: number | null; avg_corrections: number; cache_hit_pct: number; cache_saved: number; fail_rate: number; reasoning_tokens: number; avg_latency_s: number | null; active_hours: number; commits: number; code_lines: number }
@@ -94,9 +95,13 @@ function fmtCost(c: number | null | undefined): string {
   <div class="analytics">
     <div v-if="loading" class="hint">加载中…</div>
     <template v-else>
+      <header class="view-head rise">
+        <h2 class="view-title">分析</h2>
+        <span class="view-sub mono">Analytics · 热力 / 模型 / 项目 / 教训</span>
+      </header>
       <!-- 热力图 -->
-      <section class="card">
-        <h3 class="c-title mono">使用热力图 · 时 × 星期 · 近 90 天</h3>
+      <section class="card rise rise-1">
+        <h3 class="c-title mono"><CalendarDays class="lucide" /> 使用热力图 · 时 × 星期 · 近 90 天</h3>
         <div class="heatmap">
           <div class="hm-corner"></div>
           <div v-for="h in 24" :key="h" class="hm-hour mono">{{ h - 1 }}</div>
@@ -113,8 +118,8 @@ function fmtCost(c: number | null | undefined): string {
       </section>
 
       <!-- 模型对比 -->
-      <section class="card">
-        <h3 class="c-title mono">模型对比</h3>
+      <section class="card rise rise-2">
+        <h3 class="c-title mono"><Table2 class="lucide" /> 模型对比</h3>
         <table class="tbl">
           <thead>
             <tr class="mono">
@@ -143,8 +148,8 @@ function fmtCost(c: number | null | undefined): string {
       </section>
 
       <!-- 项目成本榜 -->
-      <section class="card">
-        <h3 class="c-title mono">项目成本榜 · 点击展开成本 vs commit</h3>
+      <section class="card rise rise-3">
+        <h3 class="c-title mono"><FolderGit2 class="lucide" /> 项目成本榜 · 点击展开成本 vs commit</h3>
         <div v-for="p in projects" :key="p.project_path" class="proj">
           <button class="proj-row" @click="toggleProject(p.project_path)">
             <span class="p-path mono" :title="p.project_path">{{ shortPath(p.project_path) }}</span>
@@ -179,8 +184,8 @@ function fmtCost(c: number | null | undefined): string {
         </div>
       </section>
       <!-- 教训聚合 -->
-      <section v-if="lessons" class="card">
-        <h3 class="c-title mono">教训聚合 · 返工信号 + 复盘经验</h3>
+      <section v-if="lessons" class="card rise rise-4">
+        <h3 class="c-title mono"><BookOpen class="lucide" /> 教训聚合 · 返工信号 + 复盘经验</h3>
         <div class="lessons-grid">
           <div>
             <h4 class="sub-title mono">信号规则频次</h4>
@@ -196,8 +201,8 @@ function fmtCost(c: number | null | undefined): string {
             <h4 class="sub-title mono">项目纠正分布</h4>
             <div v-for="p in lessons.byProject.slice(0, 8)" :key="p.project_path" class="proj-sig">
               <span class="ps-path mono" :title="p.project_path">{{ shortPath(p.project_path ?? '') }}</span>
-              <span class="ps-n correction">↺ {{ p.corrections }}</span>
-              <span v-if="p.frustrations" class="ps-n frustration">〜 {{ p.frustrations }}</span>
+              <span class="ps-n correction"><Undo2 class="lucide" /> {{ p.corrections }}</span>
+              <span v-if="p.frustrations" class="ps-n frustration"><Frown class="lucide" /> {{ p.frustrations }}</span>
             </div>
           </div>
         </div>
@@ -216,16 +221,20 @@ function fmtCost(c: number | null | undefined): string {
 </template>
 
 <style scoped>
-.analytics { height: 100%; overflow-y: auto; padding: 16px 20px 40px; display: flex; flex-direction: column; gap: 14px; }
+.analytics { height: 100%; overflow-y: auto; padding: 26px 28px 48px; display: flex; flex-direction: column; gap: 16px; max-width: 1440px; margin: 0 auto; width: 100%; }
 .hint { padding: 24px; text-align: center; color: var(--dim); font-size: 12px; }
 
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 14px 16px;
+  border-radius: 10px;
+  padding: 16px 18px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  transition: border-color 0.2s var(--ease-out);
 }
+.card:hover { border-color: var(--faint); }
 .c-title { font-size: 11px; color: var(--dim); letter-spacing: 0.1em; margin-bottom: 12px; font-weight: 500; }
+.c-title .lucide { width: 12px; height: 12px; margin-right: 5px; color: var(--faint); }
 
 /* 热力图 */
 .heatmap {
@@ -291,6 +300,8 @@ function fmtCost(c: number | null | undefined): string {
 .proj-sig { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 11px; border-bottom: 1px solid var(--line); }
 .proj-sig:last-child { border-bottom: none; }
 .ps-path { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-n { display: inline-flex; align-items: center; gap: 3px; }
+.ps-n .lucide { width: 11px; height: 11px; }
 .ps-n.correction { color: var(--amber); }
 .ps-n.frustration { color: var(--faint); }
 .lesson-item { display: flex; align-items: baseline; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12px; }

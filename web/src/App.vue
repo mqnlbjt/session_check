@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, fmtTokens, type SessionRow, type Stats } from './api'
+import { LayoutGrid, MessagesSquare, Search, BarChart3, Wrench } from 'lucide-vue-next'
 import SessionItem from './components/SessionItem.vue'
 import ConversationView from './components/ConversationView.vue'
 import OverviewView from './components/OverviewView.vue'
@@ -28,6 +29,14 @@ const AGENTS = [
   { value: 'claude', label: 'claude' },
   { value: 'codex', label: 'codex' },
 ]
+
+const NAV = [
+  { key: 'overview', label: '大盘', icon: LayoutGrid },
+  { key: 'sessions', label: '会话', icon: MessagesSquare },
+  { key: 'search', label: '搜索', icon: Search },
+  { key: 'analytics', label: '分析', icon: BarChart3 },
+  { key: 'harness', label: 'Harness', icon: Wrench },
+] as const
 
 async function load(reset = true, silent = false) {
   if (reset && !silent) { loading.value = true; sessions.value = [] }
@@ -135,13 +144,17 @@ function agentStat(agent: string) {
     <header class="topbar">
       <div class="brand">
         <span class="dot" aria-hidden="true"></span>
-        <span class="wordmark mono">SPECTATOR</span>
+        <span class="wordmark">SPECTATOR</span>
         <nav class="nav">
-          <button class="nav-btn mono" :class="{ on: view === 'overview' }" @click="view = 'overview'">大盘</button>
-          <button class="nav-btn mono" :class="{ on: view === 'sessions' }" @click="view = 'sessions'">会话</button>
-          <button class="nav-btn mono" :class="{ on: view === 'search' }" @click="view = 'search'">搜索</button>
-          <button class="nav-btn mono" :class="{ on: view === 'analytics' }" @click="view = 'analytics'">分析</button>
-          <button class="nav-btn mono" :class="{ on: view === 'harness' }" @click="view = 'harness'">Harness</button>
+          <button
+            v-for="n in NAV" :key="n.key"
+            class="nav-btn"
+            :class="{ on: view === n.key }"
+            @click="view = n.key"
+          >
+            <component :is="n.icon" class="lucide" />
+            <span>{{ n.label }}</span>
+          </button>
         </nav>
       </div>
       <div class="topstats mono" v-if="stats">
@@ -156,13 +169,16 @@ function agentStat(agent: string) {
     <!-- 左栏：会话列表 -->
     <aside class="sidebar">
       <div class="controls">
-        <input
-          v-model="q"
-          class="search"
-          type="search"
-          placeholder="搜索标题 / 项目路径…"
-          aria-label="搜索会话"
-        />
+        <div class="search-wrap">
+          <Search class="lucide search-icon" />
+          <input
+            v-model="q"
+            class="search"
+            type="search"
+            placeholder="搜索标题 / 项目路径…"
+            aria-label="搜索会话"
+          />
+        </div>
         <div class="chips" role="tablist" aria-label="按 agent 筛选">
           <button
             v-for="a in AGENTS" :key="a.value"
@@ -192,17 +208,19 @@ function agentStat(agent: string) {
 
     <!-- 右栏：对话查看器 / 大盘 -->
     <main class="main">
-      <OverviewView v-if="view === 'overview'" ref="overviewRef" />
-      <SearchView v-else-if="view === 'search'" @jump="onJump" />
-      <AnalyticsView v-else-if="view === 'analytics'" />
-      <HarnessView v-else-if="view === 'harness'" />
-      <template v-else>
-        <ConversationView v-if="selected" :session-id="selected" :live-tick="liveTick" :jump-seq="jumpSeq" @select="onSelect" />
-        <div v-else class="empty">
-          <p class="mono">SPECTATOR</p>
-          <p>从左侧选择一个会话开始观测</p>
+      <Transition name="view-fade" mode="out-in">
+        <OverviewView v-if="view === 'overview'" ref="overviewRef" :key="'overview'" />
+        <SearchView v-else-if="view === 'search'" @jump="onJump" :key="'search'" />
+        <AnalyticsView v-else-if="view === 'analytics'" :key="'analytics'" />
+        <HarnessView v-else-if="view === 'harness'" :key="'harness'" />
+        <div v-else :key="'sessions'" class="sessions-pane">
+          <ConversationView v-if="selected" :session-id="selected" :live-tick="liveTick" :jump-seq="jumpSeq" @select="onSelect" />
+          <div v-else class="empty">
+            <p class="wordmark-ghost">SPECTATOR</p>
+            <p>从左侧选择一个会话开始观测</p>
+          </div>
         </div>
-      </template>
+      </Transition>
     </main>
   </div>
 </template>
@@ -210,7 +228,7 @@ function agentStat(agent: string) {
 <style scoped>
 .layout {
   display: grid;
-  grid-template-rows: 44px 1fr;
+  grid-template-rows: 52px 1fr;
   grid-template-columns: 340px 1fr;
   grid-template-areas: 'top top' 'side main';
   height: 100vh;
@@ -222,29 +240,42 @@ function agentStat(agent: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 18px;
   border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  background: rgba(18, 21, 28, 0.85);
+  backdrop-filter: blur(10px);
 }
-.brand { display: flex; align-items: center; gap: 9px; }
-.nav { display: flex; gap: 4px; margin-left: 18px; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.nav { display: flex; gap: 2px; margin-left: 22px; }
 .nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--dim);
   font-size: 12px;
-  padding: 3px 12px;
+  padding: 5px 12px;
+  transition: color 0.2s var(--ease-out), background 0.2s var(--ease-out), transform 0.15s var(--spring);
 }
-.nav-btn:hover { color: var(--text); }
-.nav-btn.on { color: var(--amber); border-color: var(--amber); background: rgba(232, 163, 61, 0.08); }
+.nav-btn:hover { color: var(--text); transform: translateY(-1px); }
+.nav-btn:active { transform: scale(0.97); }
+.nav-btn.on { color: var(--amber); background: var(--amber-soft); border-color: rgba(232, 163, 61, 0.3); }
 .dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--amber);
+  box-shadow: 0 0 8px rgba(232, 163, 61, 0.7);
   animation: pulse 2.4s ease-in-out infinite;
 }
 @keyframes pulse { 50% { opacity: 0.25; } }
-.wordmark { font-size: 12px; font-weight: 500; letter-spacing: 0.28em; color: var(--text); }
+.wordmark {
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  color: var(--text);
+}
 
 .topstats { display: flex; gap: 14px; font-size: 11px; color: var(--dim); align-items: center; }
 .tstat.pi { color: var(--pi); }
@@ -262,15 +293,24 @@ function agentStat(agent: string) {
   min-height: 0;
 }
 .controls { padding: 12px 14px 10px; border-bottom: 1px solid var(--line); }
+.search-wrap { position: relative; margin-bottom: 9px; }
+.search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--faint);
+  pointer-events: none;
+}
 .search {
   width: 100%;
   background: var(--ink);
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: 6px;
   color: var(--text);
   font-size: 13px;
-  padding: 7px 10px;
-  margin-bottom: 9px;
+  padding: 8px 10px 8px 32px;
+  transition: border-color 0.2s var(--ease-out);
 }
 .search::placeholder { color: var(--faint); }
 .search:focus { border-color: var(--amber); outline: none; }
@@ -279,29 +319,46 @@ function agentStat(agent: string) {
 .chip {
   background: transparent;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--dim);
   font-size: 11px;
   padding: 3px 10px;
+  transition: color 0.2s var(--ease-out), border-color 0.2s var(--ease-out), background 0.2s var(--ease-out);
 }
 .chip:hover { color: var(--text); }
-.chip.on { color: var(--amber); border-color: var(--amber); background: rgba(232, 163, 61, 0.08); }
+.chip.on { color: var(--amber); border-color: rgba(232, 163, 61, 0.55); background: var(--amber-soft); }
 
 .list { flex: 1; overflow-y: auto; }
 .hint { padding: 24px 16px; font-size: 12px; color: var(--dim); line-height: 1.7; }
 
 /* ---- 右栏 ---- */
 .main { grid-area: main; min-width: 0; min-height: 0; }
+.sessions-pane { height: 100%; }
 .empty {
   height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 10px;
   color: var(--dim);
 }
-.empty .mono { letter-spacing: 0.3em; font-size: 13px; color: var(--faint); }
+.wordmark-ghost {
+  font-family: var(--display);
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  font-size: 15px;
+  color: transparent;
+  -webkit-text-stroke: 1px var(--faint);
+}
+
+/* 视图切换：淡入上移 */
+.view-fade-enter-active { transition: opacity 0.28s var(--ease-out), transform 0.28s var(--ease-out); }
+.view-fade-leave-active { transition: opacity 0.14s ease-in; }
+.view-fade-enter-from { opacity: 0; transform: translateY(8px); }
+.view-fade-leave-to { opacity: 0; }
+.view-fade-enter-active, .view-fade-leave-active { height: 100%; }
+.view-fade-enter-active > *, .view-fade-leave-active > * { height: 100%; }
 
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; grid-template-areas: 'top' 'main'; }

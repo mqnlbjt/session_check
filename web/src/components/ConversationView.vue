@@ -3,6 +3,7 @@ import { nextTick, onMounted, ref, watch } from 'vue'
 import { api, fmtClock, fmtTokens, type Message, type Review, type Risk, type SessionRow, type Signal } from '../api'
 import MessageItem from './MessageItem.vue'
 import ReviewPanel from './ReviewPanel.vue'
+import { ArrowLeft, ChevronDown, Download, ClipboardCheck, Undo2, Frown } from 'lucide-vue-next'
 
 const props = defineProps<{ sessionId: string; liveTick?: number; jumpSeq?: number | null }>()
 
@@ -152,7 +153,7 @@ const emit = defineEmits<{ select: [id: string] }>()
           v-if="session.parent_id"
           class="parent mono"
           @click="emit('select', session.parent_id)"
-        >← 父会话</button>
+        ><ArrowLeft class="lucide" /> 父会话</button>
         <span class="badge mono" :class="session.agent">{{ session.agent }}</span>
         <span class="path mono">{{ session.project_path }}</span>
       </div>
@@ -164,9 +165,9 @@ const emit = defineEmits<{ select: [id: string] }>()
         <span v-if="session.output_tokens">out {{ fmtTokens(session.output_tokens) }}</span>
         <span v-if="session.avg_tps" class="tps">~{{ session.avg_tps }} tok/s</span>
         <div class="review-actions">
-          <a class="review-btn mono export-btn" :href="`/api/sessions/${encodeURIComponent(sessionId)}/export.md`" download>导出</a>
+          <a class="review-btn mono export-btn" :href="`/api/sessions/${encodeURIComponent(sessionId)}/export.md`" download><Download class="lucide" /> 导出</a>
           <button class="review-btn mono" :disabled="reviewing" @click="showReviewMenu = !showReviewMenu">
-            {{ reviewing ? '复盘中…' : '复盘 ▾' }}
+            <ClipboardCheck class="lucide" /> {{ reviewing ? '复盘中…' : '复盘' }} <ChevronDown class="lucide" />
           </button>
           <div v-if="showReviewMenu" class="review-menu">
             <button class="menu-item" @click="triggerReview('none')">只复盘</button>
@@ -194,7 +195,7 @@ const emit = defineEmits<{ select: [id: string] }>()
           :class="s.kind"
           :title="s.snippet ?? ''"
           @click="scrollToSeq(s.seq)"
-        >{{ s.kind === 'correction' ? '↺' : '〜' }} {{ s.rule }} · {{ fmtClock(s.ts) }}</button>
+        ><template v-if="s.kind === 'correction'"><Undo2 class="lucide" /></template><template v-else><Frown class="lucide" /></template>{{ s.rule }} · {{ fmtClock(s.ts) }}</button>
       </div>
       <div v-if="subs.length" class="subs">
         <span class="subs-label mono">SUBAGENTS</span>
@@ -232,14 +233,19 @@ const emit = defineEmits<{ select: [id: string] }>()
 }
 .crumb { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .parent {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--amber);
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 3px 10px;
+  transition: border-color 0.2s var(--ease-out), transform 0.15s var(--spring);
 }
-.parent:hover { border-color: var(--amber); }
+.parent .lucide { width: 11px; height: 11px; }
+.parent:hover { border-color: var(--amber); transform: translateX(-2px); }
 .badge { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
 .badge.pi { color: var(--pi); }
 .badge.claude { color: var(--claude); }
@@ -258,14 +264,20 @@ const emit = defineEmits<{ select: [id: string] }>()
 .stats .tps { color: var(--amber); }
 .review-btn {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   background: transparent;
   border: 1px solid var(--amber);
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--amber);
   font-size: 11px;
-  padding: 2px 12px;
+  padding: 3px 12px;
+  transition: background 0.2s var(--ease-out), transform 0.15s var(--spring);
 }
-.review-btn:hover:not(:disabled) { background: rgba(232, 163, 61, 0.12); }
+.review-btn .lucide { width: 12px; height: 12px; }
+.review-btn:hover:not(:disabled) { background: rgba(232, 163, 61, 0.12); transform: translateY(-1px); }
+.review-btn:active:not(:disabled) { transform: scale(0.97); }
 .review-btn:disabled { opacity: 0.55; cursor: wait; }
 .review-err { color: var(--danger); font-size: 11px; }
 .review-actions { position: relative; margin-left: auto; display: flex; gap: 6px; }
@@ -312,13 +324,19 @@ const emit = defineEmits<{ select: [id: string] }>()
 
 .signals { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .signal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 10px;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: 6px;
   border: 1px solid;
   cursor: pointer;
   background: transparent;
+  transition: background 0.2s var(--ease-out), color 0.2s var(--ease-out), transform 0.15s var(--spring);
 }
+.signal-chip .lucide { width: 10px; height: 10px; }
+.signal-chip:hover { transform: translateY(-1px); }
 .signal-chip.correction { color: var(--amber); border-color: rgba(232, 163, 61, 0.4); background: rgba(232, 163, 61, 0.06); }
 .signal-chip.correction:hover { background: rgba(232, 163, 61, 0.16); }
 .signal-chip.frustration { color: var(--dim); border-color: var(--line); }

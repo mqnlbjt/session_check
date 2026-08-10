@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { fmtClock, type Block, type Message } from '../api'
+import { ChevronDown, ChevronRight, Brain, TerminalSquare } from 'lucide-vue-next'
 
 const props = defineProps<{ message: Message }>()
 
@@ -49,7 +50,8 @@ function toolInputSummary(b: Block): string {
         <!-- 思考：默认折叠 -->
         <div v-else-if="b.type === 'thinking'" class="thinking">
           <button class="fold mono" @click="expanded = !expanded">
-            {{ expanded ? '▾' : '▸' }} thinking
+            <component :is="expanded ? ChevronDown : ChevronRight" class="lucide" />
+            <Brain class="lucide" /> thinking
           </button>
           <pre v-if="expanded" class="mono">{{ b.text }}</pre>
         </div>
@@ -57,7 +59,8 @@ function toolInputSummary(b: Block): string {
         <!-- 工具调用：一行摘要，可展开 -->
         <div v-else-if="b.type === 'tool_call'" class="tool-call">
           <button class="fold mono" @click="expanded = !expanded">
-            {{ expanded ? '▾' : '▸' }} <span class="tool-name">{{ b.name }}</span>
+            <component :is="expanded ? ChevronDown : ChevronRight" class="lucide" />
+            <TerminalSquare class="lucide" /> <span class="tool-name">{{ b.name }}</span>
             <span v-if="!expanded" class="summary">{{ toolInputSummary(b) }}</span>
           </button>
           <pre v-if="expanded" class="mono">{{ typeof b.input === 'string' ? b.input : JSON.stringify(b.input, null, 2) }}</pre>
@@ -66,7 +69,8 @@ function toolInputSummary(b: Block): string {
         <!-- 工具结果 -->
         <div v-else-if="b.type === 'tool_result'" class="tool-result" :class="{ error: b.isError }">
           <button v-if="isCollapsible" class="fold mono" @click="expanded = !expanded">
-            {{ expanded ? '▾' : '▸' }} {{ b.name ?? 'result' }}{{ b.isError ? ' · 错误' : '' }}
+            <component :is="expanded ? ChevronDown : ChevronRight" class="lucide" />
+            {{ b.name ?? 'result' }}{{ b.isError ? ' · 错误' : '' }}
           </button>
           <pre class="mono" :class="{ clipped: !expanded && isCollapsible }">{{ b.output }}</pre>
         </div>
@@ -106,13 +110,18 @@ function toolInputSummary(b: Block): string {
 .text { white-space: pre-wrap; word-break: break-word; font-size: 13.5px; }
 
 .fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: none;
   color: var(--dim);
   font-size: 11px;
   padding: 2px 0;
   text-align: left;
+  transition: color 0.2s var(--ease-out);
 }
+.fold .lucide { width: 11px; height: 11px; }
 .fold:hover { color: var(--text); }
 
 .thinking pre, .tool-call pre, .tool-result pre {

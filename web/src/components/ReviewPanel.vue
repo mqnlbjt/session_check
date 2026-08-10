@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { fmtTime, type Review, type ReviewFinding } from '../api'
+import { ChevronDown, ChevronRight } from 'lucide-vue-next'
 
 const props = defineProps<{ reviews: Review[] }>()
 
@@ -56,7 +57,7 @@ const SOURCE_LABEL: Record<string, string> = {
 
     <!-- 历史复盘折叠 -->
     <button v-if="history.length" class="history-toggle mono" @click="showHistory = !showHistory">
-      {{ showHistory ? '▾' : '▸' }} {{ history.length }} 条历史复盘
+      <component :is="showHistory ? ChevronDown : ChevronRight" class="lucide" /> {{ history.length }} 条历史复盘
     </button>
     <template v-if="showHistory">
       <article v-for="r in history" :key="r.id" class="review-card old" :class="VERDICT[r.verdict].cls">
@@ -112,11 +113,16 @@ const SOURCE_LABEL: Record<string, string> = {
 
 .history-toggle {
   margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: none;
   color: var(--dim);
   font-size: 11px;
   padding: 2px 0;
+  transition: color 0.2s var(--ease-out);
 }
+.history-toggle .lucide { width: 11px; height: 11px; }
 .history-toggle:hover { color: var(--text); }
 </style>
