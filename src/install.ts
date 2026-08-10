@@ -10,6 +10,12 @@ export type SkillInstaller = (name: string) => Promise<{ dir: string }>
 export type SkillRemover = (dir: string) => Promise<void>
 export interface InstallDeps { skillInstaller?: SkillInstaller; skillRemover?: SkillRemover }
 
+// 测试注入点（API 层无法传 deps，走模块级覆盖；生产代码不受影响）
+let testHooks: { installer: SkillInstaller | null; remover: SkillRemover | null } = { installer: null, remover: null }
+export function __setSkillHooksForTests(installer: SkillInstaller | null, remover: SkillRemover | null): void {
+  testHooks = { installer, remover }
+}
+
 // 真实安装器：npx skills add（网络操作，只在用户确认后执行）
 const defaultSkillInstaller: SkillInstaller = (name) =>
   new Promise((resolve, reject) => {
@@ -99,7 +105,7 @@ export async function installSuggestion(suggestionId: number, deps: InstallDeps 
   if (ev.route === 'skill') {
     if (!ev.candidate?.name) throw new Error('无候选 skill，无法自动安装')
     assertSkillName(ev.candidate.name)
-    const installer = deps.skillInstaller ?? defaultSkillInstaller
+    const installer = deps.skillInstaller ?? testHooks.installer ?? defaultSkillInstaller
     const { dir } = await installer(ev.candidate.name)
     targetPath = dir
     backup = null // 目录是新建的，撤销 = 删除
@@ -137,7 +143,7 @@ export async function uninstall(installationId: number, deps: InstallDeps = {}):
   if (!row) throw new Error('安装记录不存在')
   if (row.status !== 'active') return row
   if (row.route === 'skill') {
-    const remover = deps.skillRemover ?? defaultSkillRemover
+    const remover = deps.skillRemover ?? testHooks.remover ?? defaultSkillRemover
     await remover(row.target_path)
   } else {
     // hook / agents-md：还原备份；备份为 null 说明文件是我们创建的，删掉

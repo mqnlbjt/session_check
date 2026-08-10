@@ -115,22 +115,27 @@ describe('一键撤销（可逆）', () => {
 })
 
 describe('安装 API', () => {
-  it('POST /api/harness/suggestions/:id/install + POST /api/harness/installations/:id/uninstall', async () => {
+  it('POST install + uninstall 全链路（注入假安装器，不真跑 npx）', async () => {
+    const installed: string[] = []
+    const removed: string[] = []
+    inst.__setSkillHooksForTests(
+      async (name: string) => { installed.push(name); return { dir: `/fake/skills/${name}` } },
+      async (dir: string) => { removed.push(dir) },
+    )
     const sugId = mkRecSug(skillProj, {
       category: 'env-context', category_label: '环境上下文缺失', route: 'skill',
       candidate: { name: 'env-helper', installs: 5, url: '', description: '' },
     })
     const res = await app.request(`/api/harness/suggestions/${sugId}/install`, { method: 'POST' })
-    // 默认安装器真跑 npx 会失败（网络/CLI 不存在）→ 允许 200 或 500，但路由必须存在（非 404）
-    expect(res.status).not.toBe(404)
+    expect(res.status).toBe(200) // 成功路径（此前只断言 not-404，是真 npx 的薛定谔测试——flake 根源）
+    expect(installed).toEqual(['env-helper'])
     const list = await (await app.request('/api/harness/installations')).json()
-    expect(Array.isArray(list)).toBe(true)
-    expect(list.length).toBeGreaterThan(0)
-    const active = list.find((x: any) => x.status === 'active')
-    if (active) {
-      const u = await app.request(`/api/harness/installations/${active.id}/uninstall`, { method: 'POST' })
-      expect(u.status).toBe(200)
-    }
+    const active = list.find((x: any) => x.suggestion_id === sugId && x.status === 'active')
+    expect(active).toBeTruthy()
+    const u = await app.request(`/api/harness/installations/${active.id}/uninstall`, { method: 'POST' })
+    expect(u.status).toBe(200)
+    expect(removed).toEqual(['/fake/skills/env-helper'])
+    inst.__setSkillHooksForTests(null, null)
   })
 })
 
