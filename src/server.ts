@@ -424,6 +424,10 @@ app.get('/api/sessions/:id/review-status', (c) => {
 })
 
 // ---- 监控大盘聚合 ----
+// ISO cutoff：库里 ts 是 ISO 格式（带 T），datetime('now') 是空格格式——字符串比较时 'T' > ' '，
+// 截止日当天的行会全部通过过滤（审计 P0-1）。JS 侧算好 ISO 时间再绑定，保索引（sargable）
+const isoCutoff = (agoMs: number) => new Date(Date.now() - agoMs).toISOString()
+
 app.get('/api/overview', (c) => {
   const mainOnly = `parent_id IS NULL AND (label IS NULL OR label NOT LIKE 'subagent%')`
 
@@ -438,8 +442,8 @@ app.get('/api/overview', (c) => {
   const usageRows = db.prepare(`
     SELECT date(m.ts, 'localtime') d, COALESCE(m.model, s.model) model, m.usage_json
     FROM messages m JOIN sessions s ON s.id = m.session_id
-    WHERE m.usage_json IS NOT NULL AND m.ts >= datetime('now', '-30 days')
-  `).all() as { d: string; model: string | null; usage_json: string }[]
+    WHERE m.usage_json IS NOT NULL AND m.ts >= ?
+  `).all(isoCutoff(30 * 86400e3)) as { d: string; model: string | null; usage_json: string }[]
 
   const todayStr = new Date().toLocaleDateString('sv-SE') // YYYY-MM-DD 本地
   let todayIn = 0, todayOut = 0, todayCost = 0
@@ -460,9 +464,9 @@ app.get('/api/overview', (c) => {
     SELECT m.session_id, date(m.ts, 'localtime') d, m.ts, m.cum_input, m.cum_output,
            s.model, s.input_tokens s_in, s.cache_read s_cache
     FROM metrics m JOIN sessions s ON s.id = m.session_id
-    WHERE m.ts >= datetime('now', '-40 days')
+    WHERE m.ts >= ?
     ORDER BY m.session_id, m.ts
-  `).all() as { session_id: string; d: string; ts: string; cum_input: number; cum_output: number; model: string | null; s_in: number; s_cache: number }[]
+  `).all(isoCutoff(40 * 86400e3)) as { session_id: string; d: string; ts: string; cum_input: number; cum_output: number; model: string | null; s_in: number; s_cache: number }[]
   let prevMetric: (typeof metricRows)[number] | null = null
   for (const r of metricRows) {
     if (prevMetric && prevMetric.session_id === r.session_id) {
@@ -493,9 +497,9 @@ app.get('/api/overview', (c) => {
   const daily = (db.prepare(`
     SELECT date(m.ts, 'localtime') d, COUNT(DISTINCT m.session_id) sessions, COUNT(*) messages
     FROM messages m JOIN sessions s ON s.id = m.session_id
-    WHERE s.${mainOnly} AND m.ts >= datetime('now', '-30 days')
+    WHERE s.${mainOnly} AND m.ts >= ?
     GROUP BY d ORDER BY d
-  `).all() as { d: string; sessions: number; messages: number }[]).map((r) => ({
+  `).all(isoCutoff(30 * 86400e3)) as { d: string; sessions: number; messages: number }[]).map((r) => ({
     ...r,
     output_tokens: usageByDay.get(r.d)?.output ?? 0,
     input_tokens: usageByDay.get(r.d)?.input ?? 0,
@@ -508,9 +512,9 @@ app.get('/api/overview', (c) => {
            SUM(input_tokens) input_tokens, SUM(cache_read) cache_read, SUM(cache_creation) cache_creation,
            ROUND(AVG(CASE WHEN avg_tps > 0 THEN avg_tps END), 1) avg_tps
     FROM sessions
-    WHERE model IS NOT NULL AND started_at >= datetime('now', '-30 days')
+    WHERE model IS NOT NULL AND started_at >= ?
     GROUP BY model ORDER BY output_tokens DESC LIMIT 12
-  `).all() as any[]).map((m) => ({
+  `).all(isoCutoff(30 * 86400e3)) as any[]).map((m) => ({
     ...m,
     cost: costOf(m.model, m.input_tokens ?? 0, m.output_tokens ?? 0, m.cache_read ?? 0, m.cache_creation ?? 0),
   }))
@@ -519,9 +523,9 @@ app.get('/api/overview', (c) => {
   const active = db.prepare(`
     SELECT id, agent, title, model, message_count, ended_at
     FROM sessions
-    WHERE ${mainOnly} AND ended_at >= datetime('now', '-5 minutes')
+    WHERE ${mainOnly} AND ended_at >= ?
     ORDER BY ended_at DESC LIMIT 10
-  `).all()
+  `).all(isoCutoff(5 * 60e3))
 
   // 错误率：按 agent 汇总 + 错误最多的会话
   const agentErrors = db.prepare(`
@@ -564,15 +568,15 @@ app.get('/api/overview', (c) => {
   const weeklyActive = db.prepare(`
     SELECT strftime('%Y-W%W', m.ts, 'localtime') w, COUNT(DISTINCT m.session_id) n
     FROM messages m JOIN sessions s ON s.id = m.session_id
-    WHERE s.${mainOnly} AND m.ts >= datetime('now', '-84 days') GROUP BY w ORDER BY w
-  `).all() as { w: string; n: number }[]
+    WHERE s.${mainOnly} AND m.ts >= ? GROUP BY w ORDER BY w
+  `).all(isoCutoff(84 * 86400e3)) as { w: string; n: number }[]
   const weeklyCorrected = new Map(
     (db.prepare(`
       SELECT strftime('%Y-W%W', sig.ts, 'localtime') w, COUNT(DISTINCT sig.session_id) n
       FROM signals sig JOIN sessions s ON s.id = sig.session_id
-      WHERE sig.kind = 'correction' AND s.${mainOnly} AND sig.ts >= datetime('now', '-84 days')
+      WHERE sig.kind = 'correction' AND s.${mainOnly} AND sig.ts >= ?
       GROUP BY w
-    `).all() as { w: string; n: number }[]).map((r) => [r.w, r.n])
+    `).all(isoCutoff(84 * 86400e3)) as { w: string; n: number }[]).map((r) => [r.w, r.n])
   )
   const reworkWeekly = weeklyActive.map((r) => ({
     w: r.w,
@@ -646,7 +650,9 @@ export function startServer(port = 8321) {
       titleTimer = setTimeout(() => { titleTimer = null; backfillAllTitles() }, 2000)
     }
   })
-  serve({ fetch: app.fetch, port }, (info) => {
+  // 默认只绑回环：会话全文/项目路径都是敏感数据，0.0.0.0 会把它们暴露给整个局域网（审计 H1）
+  // 确有远程访问需求时显式 SPECTATOR_HOST=0.0.0.0 放行
+  serve({ fetch: app.fetch, port, hostname: process.env.SPECTATOR_HOST ?? '127.0.0.1' }, (info) => {
     console.log(`[spectator] API 就绪: http://localhost:${info.port}`)
   })
 }

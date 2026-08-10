@@ -8,7 +8,10 @@ import { costOf, findPrice } from './pricing.js'
 const execFileAsync = promisify(execFile)
 
 const MAIN_ONLY = `parent_id IS NULL AND (label IS NULL OR label NOT LIKE 'subagent%')`
-const WINDOW = `datetime('now', '-90 days')`
+// ISO cutoff（内联带引号）：库里 ts 是 ISO 格式，datetime('now') 是空格格式，直接比较会让截止日当天全部通过（审计 P0-1）
+const WINDOW = `'${new Date(Date.now() - 90 * 86400e3).toISOString()}'`
+// windowDays 动态窗：同样生成 ISO 字面量（JS 生成的固定格式，无注入面）
+const isoWindow = (days: number) => `'${new Date(Date.now() - Math.trunc(days) * 86400e3).toISOString()}'`
 
 // ---- 热力图：7（星期）×24（小时）消息数 + output token ----
 export function heatmap() {
@@ -39,7 +42,7 @@ const bareModel = (m: string) => (m.includes('/') ? m.split('/').pop()! : m)
 
 // windowDays：模型更新快，建议类场景用 30 天；大盘分析默认 90 天
 export async function modelCompare(windowDays = 90) {
-  const window = `datetime('now', '-${Math.trunc(windowDays)} days')`
+  const window = isoWindow(windowDays)
   const rows = db.prepare(`
     SELECT model, COUNT(*) sessions,
            SUM(input_tokens) input, SUM(output_tokens) output,
@@ -271,7 +274,7 @@ export function classifyTask(title: string | null): string {
 
 // ---- 任务×模型统计：每个任务类型下各模型的成本/纠正/产出 ----
 export function taskModelStats(windowDays = 30) {
-  const window = `datetime('now', '-${Math.trunc(windowDays)} days')`
+  const window = isoWindow(windowDays)
   const corrBySession = new Map(
     (db.prepare(`SELECT session_id, COUNT(*) n FROM signals WHERE kind = 'correction' GROUP BY session_id`).all() as { session_id: string; n: number }[])
       .map((r) => [r.session_id, r.n])
@@ -401,9 +404,9 @@ export async function projectDetail(path: string) {
     SELECT m.session_id, date(m.ts, 'localtime') d, m.ts, m.cum_input, m.cum_output,
            s.model, s.input_tokens s_in, s.cache_read s_cache
     FROM metrics m JOIN sessions s ON s.id = m.session_id
-    WHERE s.project_path = ? AND s.${MAIN_ONLY} AND m.ts >= datetime('now', '-100 days')
+    WHERE s.project_path = ? AND s.${MAIN_ONLY} AND m.ts >= ?
     ORDER BY m.session_id, m.ts
-  `).all(path) as { session_id: string; d: string; ts: string; cum_input: number; cum_output: number; model: string | null; s_in: number; s_cache: number }[]
+  `).all(path, new Date(Date.now() - 100 * 86400e3).toISOString()) as { session_id: string; d: string; ts: string; cum_input: number; cum_output: number; model: string | null; s_in: number; s_cache: number }[]
   let prevMetric: (typeof metricRows)[number] | null = null
   for (const r of metricRows) {
     if (prevMetric && prevMetric.session_id === r.session_id) {
