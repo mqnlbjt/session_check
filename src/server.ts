@@ -16,7 +16,16 @@ import { taskModelStats } from './analytics.js'
 import { extractLessons, planPersist, applyPersistPlan, type PersistMode } from './persist.js'
 
 // 复盘沉淀结果（sessionPk → 写入的文件路径），供 review-status 查询
+// LRU 上限（审计 #10：无界 Map 随会话数线性涨）
+const LAST_PERSIST_MAX = 500
 export const lastPersist = new Map<string, string>()
+export function setLastPersist(key: string, value: string): void {
+  lastPersist.delete(key) // 重插到末尾（Map 保插入序）
+  lastPersist.set(key, value)
+  if (lastPersist.size > LAST_PERSIST_MAX) {
+    lastPersist.delete(lastPersist.keys().next().value!)
+  }
+}
 import { scanAll, backfillAllTitles } from './ingest.js'
 import { backfillTps } from './tps.js'
 import { startWatch } from './watch.js'
@@ -412,14 +421,14 @@ app.post('/api/sessions/:id/review', async (c) => {
     if (persist !== 'none' && session.project_path) {
       const lessons = extractLessons(r.findings)
       if (lessons.length === 0) {
-        lastPersist.set(id, '') // 空串 = 没有可沉淀的教训
+        setLastPersist(id, '') // 空串 = 没有可沉淀的教训
       } else {
         try {
           const title = session.title ?? id
           const plan = planPersist(persist, agent, session.project_path, title, lessons)
           if (plan) {
             createPendingWrite({ session_id: id, kind: plan.kind, target_path: plan.filePath, content: plan.content })
-            lastPersist.set(id, `pending:${plan.filePath}`)
+            setLastPersist(id, `pending:${plan.filePath}`)
             console.log(`[review] 已生成待确认沉淀 → ${plan.filePath}`)
           }
         } catch (e) {

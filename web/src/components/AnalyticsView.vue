@@ -19,6 +19,7 @@ const models = ref<ModelRow[]>([])
 const projects = ref<ProjectRow[]>([])
 const lessons = ref<Lessons | null>(null)
 const loading = ref(true)
+const errorMsg = ref('')
 const expanded = ref<string | null>(null)
 const detail = ref<ProjectDetail | null>(null)
 const detailLoading = ref(false)
@@ -37,6 +38,8 @@ onMounted(async () => {
     models.value = m
     projects.value = p
     lessons.value = l
+  } catch (e: any) {
+    errorMsg.value = `加载失败：${e?.message ?? '未知错误'}`
   } finally {
     loading.value = false
   }
@@ -94,6 +97,7 @@ function fmtCost(c: number | null | undefined): string {
 <template>
   <div class="analytics">
     <div v-if="loading" class="hint">加载中…</div>
+    <div v-else-if="errorMsg" class="hint err">{{ errorMsg }}</div>
     <template v-else>
       <header class="view-head rise">
         <h2 class="view-title">分析</h2>
@@ -223,6 +227,7 @@ function fmtCost(c: number | null | undefined): string {
 <style scoped>
 .analytics { height: 100%; overflow-y: auto; padding: 26px 28px 48px; display: flex; flex-direction: column; gap: 16px; max-width: 1440px; margin: 0 auto; width: 100%; }
 .hint { padding: 24px; text-align: center; color: var(--dim); font-size: 12px; }
+.hint.err { color: var(--danger); }
 
 .card {
   background: var(--panel);

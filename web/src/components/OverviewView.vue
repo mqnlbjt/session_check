@@ -18,11 +18,18 @@ interface Overview {
 
 const data = ref<Overview | null>(null)
 const loading = ref(true)
+const errorMsg = ref('')
 
 async function load() {
   loading.value = true
+  errorMsg.value = ''
   try {
-    data.value = await fetch('/api/overview').then((r) => r.json())
+    data.value = await fetch('/api/overview').then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return r.json()
+    })
+  } catch (e: any) {
+    errorMsg.value = `加载失败：${e?.message ?? '未知错误'}`
   } finally {
     loading.value = false
   }
@@ -72,6 +79,7 @@ function maxOf(nums: (number | null)[]) {
 <template>
   <div class="overview">
     <div v-if="loading && !data" class="state">汇总中…</div>
+    <div v-else-if="errorMsg && !data" class="state error">{{ errorMsg }}</div>
 
     <template v-else-if="data">
       <!-- 进行中：5 分钟内有新消息 -->
@@ -238,6 +246,7 @@ function maxOf(nums: (number | null)[]) {
   width: 100%;
 }
 .state { padding: 60px; text-align: center; color: var(--dim); }
+.state.error { color: var(--danger); }
 
 .kpis { display: flex; gap: 10px; flex-wrap: wrap; }
 .kpi {

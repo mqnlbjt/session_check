@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, fmtClock, fmtTokens, type Message, type Review, type Risk, type SessionRow, type Signal } from '../api'
 import MessageItem from './MessageItem.vue'
 import ReviewPanel from './ReviewPanel.vue'
@@ -26,9 +26,11 @@ async function triggerReview(persist: 'none' | 'instructions' | 'skill' = 'none'
   reviewing.value = true
   reviewError.value = ''
   persistedTo.value = null
+  // 快照会话 id（审计 P3：poll 闭包读 live props.sessionId，切换会话后新旧比对错乱）
+  const sid = props.sessionId
   const before = new Set(reviews.value.map((r) => r.id))
   try {
-    const res = await fetch(`/api/sessions/${encodeURIComponent(props.sessionId)}/review`, {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/review`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ persist }),
@@ -37,16 +39,17 @@ async function triggerReview(persist: 'none' | 'instructions' | 'skill' = 'none'
     // 轮询等新复盘出现（agent headless 评审要 1-5 分钟）
     const deadline = Date.now() + 5 * 60_000
     const poll = async () => {
+      if (props.sessionId !== sid) return // 已切走，放弃本轮轮询
       try {
-        const latest = await api.reviews(props.sessionId)
+        const latest = await api.reviews(sid)
         if (latest.some((r) => !before.has(r.id))) {
           reviews.value = latest
           reviewing.value = false
-          const st = await fetch(`/api/sessions/${encodeURIComponent(props.sessionId)}/review-status`).then((r) => r.json())
+          const st = await fetch(`/api/sessions/${encodeURIComponent(sid)}/review-status`).then((r) => r.json())
           if (st.persisted) persistedTo.value = st.persisted
           return
         }
-        const st = await fetch(`/api/sessions/${encodeURIComponent(props.sessionId)}/review-status`).then((r) => r.json())
+        const st = await fetch(`/api/sessions/${encodeURIComponent(sid)}/review-status`).then((r) => r.json())
         if (st.error) {
           reviewError.value = st.error
           reviewing.value = false
@@ -112,6 +115,7 @@ async function load() {
 }
 
 onMounted(load)
+onUnmounted(() => { if (reviewPoll) { clearTimeout(reviewPoll); reviewPoll = null } })
 watch(() => props.sessionId, load)
 
 // 搜索跳转定位：消息加载后滚动到 data-seq 对应的消息并闪烁高亮
