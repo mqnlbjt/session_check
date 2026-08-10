@@ -271,3 +271,14 @@ describe('分类解析抗噪音（同一 bug）', () => {
     expect(r[0].category).toBe('overreach')
   })
 })
+
+describe('模型建议措辞按方向区分（用户反馈修正）', () => {
+  it('替代模型纠正率更低时不说「质量相当」', async () => {
+    // 测试库里 gpt-5.5 有纠正、h-alt 的 deepseek 零纠正 → 替代更优
+    const advice = await harness.modelAdvice()
+    const gpt = advice.find((a) => a.content.includes('gpt-5.5'))
+    expect(gpt).toBeTruthy()
+    expect(gpt!.content).toContain('更低')
+    expect(gpt!.content).not.toContain('质量相当')
+  })
+})

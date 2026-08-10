@@ -211,8 +211,12 @@ export async function modelAdvice(): Promise<{ content: string; evidence: string
     if (alt.avg_latency_s && m.avg_latency_s && alt.avg_latency_s < m.avg_latency_s * 0.7) {
       parts.push(`响应快 ${(m.avg_latency_s / alt.avg_latency_s).toFixed(1)} 倍`)
     }
+    // 质量措辞按方向区分：替代纠正率更低说「更低」，容差内略高才说「相当」（用户反馈：0.2 vs 0.6 不叫相当）
+    const quality = alt.avg_corrections < m.avg_corrections
+      ? `纠正率更低（${alt.avg_corrections} vs ${m.avg_corrections}）`
+      : `质量相当（纠正率 ${alt.avg_corrections} vs ${m.avg_corrections}）`
     advice.push({
-      content: `${m.model} 近 30 天 $${m.cost.toFixed(1)}（${m.sessions} 会话），${alt.model} 质量相当（纠正率 ${alt.avg_corrections} vs ${m.avg_corrections}）但${parts.join('、')}——建议把部分任务切到 ${alt.model}`,
+      content: `${m.model} 近 30 天 $${m.cost.toFixed(1)}（${m.sessions} 会话），${alt.model} ${quality}但${parts.join('、')}——建议把部分任务切到 ${alt.model}`,
       evidence: JSON.stringify({
         window_days: 30,
         from: m,
