@@ -32,7 +32,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   ended_at      TEXT,
   message_count INTEGER NOT NULL DEFAULT 0,
   input_tokens  INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  avg_tps       REAL,
+  error_count   INTEGER NOT NULL DEFAULT 0,
+  risk_count    INTEGER NOT NULL DEFAULT 0,
+  cache_read    INTEGER NOT NULL DEFAULT 0,
+  cache_creation INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS messages (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,6 +49,7 @@ CREATE TABLE IF NOT EXISTS messages (
   blocks_json TEXT NOT NULL,
   model       TEXT,
   usage_json  TEXT,
+  api_error   INTEGER NOT NULL DEFAULT 0,
   UNIQUE(session_id, event_id)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
@@ -58,15 +64,22 @@ CREATE TABLE IF NOT EXISTS metrics (
 CREATE INDEX IF NOT EXISTS idx_metrics_session ON metrics(session_id, ts);
 `)
 
-// 轻量迁移：老库补 parent_id / label / avg_tps / 监控列
-try { db.exec(`ALTER TABLE sessions ADD COLUMN parent_id TEXT`) } catch { /* 已存在 */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN label TEXT`) } catch { /* 已存在 */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN avg_tps REAL`) } catch { /* 已存在 */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN error_count INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN risk_count INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN cache_read INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN cache_creation INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
-try { db.exec(`ALTER TABLE messages ADD COLUMN api_error INTEGER NOT NULL DEFAULT 0`) } catch { /* 已存在 */ }
+// 轻量迁移：老库补列。只吞「duplicate column」（预期路径），其他错误（磁盘满/库损坏/语法错）必须暴露（审计 P2）
+export function addColumn(ddl: string): void {
+  try { db.exec(ddl) } catch (e: any) {
+    if (/duplicate column/i.test(e?.message ?? '')) return
+    console.error('[db] 迁移失败:', ddl, e)
+    throw e
+  }
+}
+addColumn(`ALTER TABLE sessions ADD COLUMN parent_id TEXT`)
+addColumn(`ALTER TABLE sessions ADD COLUMN label TEXT`)
+addColumn(`ALTER TABLE sessions ADD COLUMN avg_tps REAL`)
+addColumn(`ALTER TABLE sessions ADD COLUMN error_count INTEGER NOT NULL DEFAULT 0`)
+addColumn(`ALTER TABLE sessions ADD COLUMN risk_count INTEGER NOT NULL DEFAULT 0`)
+addColumn(`ALTER TABLE sessions ADD COLUMN cache_read INTEGER NOT NULL DEFAULT 0`)
+addColumn(`ALTER TABLE sessions ADD COLUMN cache_creation INTEGER NOT NULL DEFAULT 0`)
+addColumn(`ALTER TABLE messages ADD COLUMN api_error INTEGER NOT NULL DEFAULT 0`)
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS risks (
@@ -100,6 +113,9 @@ CREATE TABLE IF NOT EXISTS signals (
   kind       TEXT NOT NULL,           -- correction | frustration
   snippet    TEXT,
   ts         TEXT,
+  confirmation TEXT,          -- confirmed | unconfirmed | likely-noise（#13）
+  root_cause   TEXT,          -- 根因类别（#14，LLM 分类写入）
+  cause_confidence REAL,
   UNIQUE(session_id, message_id, rule)
 );
 CREATE INDEX IF NOT EXISTS idx_signals_session ON signals(session_id);
@@ -135,10 +151,10 @@ CREATE TABLE IF NOT EXISTS pending_writes (
 );
 `)
 
-// signals 表在上面第二个块才创建，轻量迁移必须放这里（放上面会被 catch 静默吞掉）
-try { db.exec(`ALTER TABLE signals ADD COLUMN confirmation TEXT`) } catch { /* 已存在 */ }
-try { db.exec(`ALTER TABLE signals ADD COLUMN root_cause TEXT`) } catch { /* 已存在 */ }
-try { db.exec(`ALTER TABLE signals ADD COLUMN cause_confidence REAL`) } catch { /* 已存在 */ }
+// signals 表在上面第二个块才创建，轻量迁移必须放这里（放上面会被静默吞掉）
+addColumn(`ALTER TABLE signals ADD COLUMN confirmation TEXT`)
+addColumn(`ALTER TABLE signals ADD COLUMN root_cause TEXT`)
+addColumn(`ALTER TABLE signals ADD COLUMN cause_confidence REAL`)
 
 // #15 静态确认：类别级检查结论（upsert 语义，UNIQUE(project_path, category)）
 db.exec(`
@@ -162,6 +178,7 @@ CREATE TABLE IF NOT EXISTS installations (
   category       TEXT,            -- 根因类别（agents-md 采纳为 NULL）
   route          TEXT NOT NULL,   -- skill | hook | mcp | agents-md
   artifact       TEXT NOT NULL,   -- skill 名 / hook 类型 / guard-rule
+  version        TEXT,            -- pin 版本（候选有版本信息时记录）
   target_path    TEXT NOT NULL,
   backup         TEXT,            -- 写入前的原内容（NULL = 文件/目录原本不存在）
   baseline_json  TEXT NOT NULL,   -- 采纳前 90 天信号基线（#18 对比锚点）
@@ -171,7 +188,7 @@ CREATE TABLE IF NOT EXISTS installations (
   UNIQUE(suggestion_id)
 );
 `)
-try { db.exec(`ALTER TABLE installations ADD COLUMN version TEXT`) } catch { /* 已存在 */ }
+addColumn(`ALTER TABLE installations ADD COLUMN version TEXT`)
 
 // FTS5 全文搜索：只索引 text block + tool_call 入参（thinking / tool_result 不索引）
 // trigram 分词：中文可子串匹配，代价是查询需 ≥3 字符（短查询走 LIKE 降级）
